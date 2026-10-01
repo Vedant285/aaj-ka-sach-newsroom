@@ -110,6 +110,16 @@ query is recorded in image metadata; exhausted searches report their search and
 candidate counts. These are representative images: manually review relevance and
 licensing before publishing. If every search fails, publication still stops.
 
+CC0 selection requires both the exact CC0 licence label and an official
+`creativecommons.org/publicdomain/zero/1.0/` licence URL. Commons can return
+`Copyrighted: True` for CC0-labelled files; that flag alone no longer rejects them.
+Public-domain-labelled files still require `Copyrighted: False`. Attribution and
+non-free flags are checked case-insensitively; affirmative or unknown values are
+rejected. This does not enable CC BY, CC BY-SA, or unspecified licences.
+Image selection and downloads share an allowlist for Wikimedia's original-file
+host (`upload.wikimedia.org`) and thumbnail host (`thumb.wikimedia.org`), while
+retaining HTTPS, redirect-host, file-type, and download-size checks.
+
 If the response has malformed block objects, the wrong paragraph/subheading
 structure, or an out-of-range body length, the runner prints the offending block
 requirement or actual counts and allows **one format/length correction request per
@@ -231,8 +241,8 @@ Using `npm.cmd` avoids PowerShell execution-policy issues with `npm.ps1`.
   slugs/tags, source references, and exact evidence excerpts. Evidence proves text
   was supplied, not that every generated claim is correct. Review factual accuracy,
   positivity, originality, and image relevance yourself.
-- Accept Commons metadata only for CC0/public-domain bitmaps without declared
-  copyright, mandatory attribution, or listed restrictions. Images are labelled
+- Accept Commons metadata only for verified CC0-labelled or public-domain bitmaps
+  without mandatory attribution, non-free flags, or listed restrictions. Images are labelled
   representative in the published body. Retain creator, licence, and source records.
   Metadata is not a guarantee against other legal or personality-rights restrictions.
   CC BY/CC BY-SA support requires a public attribution implementation first.
