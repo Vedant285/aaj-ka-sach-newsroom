@@ -40,6 +40,7 @@ export function canonicalSource(value) {
 
 export class QuotaError extends Error {}
 export class ArticleStructureError extends Error {}
+export class ArticleLengthError extends Error {}
 
 export async function request(url, { domains, label, retries = 2, maxBytes = 3_000_000, ...options }) {
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -186,7 +187,11 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
       throw new ArticleStructureError(`${category}: incorrect article structure (paragraphs=${paragraphs}, headings=${headings}, firstBlock=${article.blocks[0]?.type ?? 'missing'}). Expected 4-8 paragraph blocks, 1-2 heading blocks, and a paragraph first.`);
     }
     const body = article.blocks.map((block) => block.text).join('\n');
-    assert(characterCount(body) >= 1500 && characterCount(`${body}\nचित्र: प्रतीकात्मक तस्वीर।`) <= 2900, `${category}: body including the image notice must contain 1500-2900 characters`);
+    const bodyCharacters = characterCount(body);
+    const totalCharacters = characterCount(`${body}\nचित्र: प्रतीकात्मक तस्वीर।`);
+    if (bodyCharacters < 1500 || totalCharacters > 2900) {
+      throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters}, includingImageNotice=${totalCharacters} Unicode characters). Body must contain at least 1500 characters; body including the image notice must not exceed 2900. Revise toward 2000-2400 body characters using only supplied source facts.`);
+    }
     const visible = [article.title, article.district, ...article.tags, body].join(' ');
     assert(!/[a-z]/i.test(visible) && /[\u0900-\u097f]/.test(visible), `${category}: article must use Devanagari, not Latin text`);
     assert(!/एजेंसी|हमारे संवाददाता|पीटीआई|एएनआई|अमर उजाला|दैनिक जागरण|बीबीसी|एनडीटीवी/.test(visible), `${category}: outlet credit or byline in copy`);
