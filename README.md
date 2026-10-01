@@ -102,9 +102,47 @@ of exactly one billable/quota-counted request. It also fetches source articles a
 Commons image metadata. Dry-run consumes API quota but uploads no assets and creates
 no posts. If no suitable supported story or image exists, it fails rather than inventing one.
 
+If the response has the wrong paragraph/subheading structure, the runner prints the
+actual counts and allows **one structural correction request per category**. This
+consumes additional Gemini quota and uses the same request pacing. The corrected
+article must pass every original validation rule. It does not retry missing-story,
+length, evidence, image, or other validation failures as structural corrections.
+Repeated structure failures stop that category; the runner never loops indefinitely.
+The final category failure is printed in the Actions log as well as the report.
+
+After uploading code fixes to GitHub, start a **new run** using **Actions > Daily
+Hindi newsroom > Run workflow** on `main`. Do not use **Re-run jobs** on an old run
+to test new code, since that repeats the old run's commit.
+
 Categories: `up` (Uttar Pradesh), `uk` (Uttarakhand), `delhi`, `world`, `dharma`,
 `business`, `sports`, `others`, `mystery`, `lifestyle`. National/international
 fallback sources may be used when appropriate local coverage is unavailable.
+
+## If Gemini fails: run the connection check
+
+The independent [Gemini API check workflow](./.github/workflows/gemini-check.yml)
+sends at most one small JSON request using the same repository secret and model
+variable. It never fetches news, touches Sanity, retries, or prints the API key.
+This request can consume Gemini quota; a successful result does not guarantee
+that a much larger news request will succeed or fit free-tier limits.
+
+If your repository already has the original upload, add just this new workflow
+file to `.github/workflows/gemini-check.yml` on your default branch. You do not need
+to replace the existing newsroom workflow or upload the whole project again.
+
+Open **Actions > Gemini API check > Run workflow**. After completion, open the
+run summary or **Check Gemini with one small request** log. Share the diagnostic
+`httpStatus`, `apiStatus`, `message`, and `finishReason` if present. The message is
+bounded and the configured key is redacted; raw API bodies are not printed.
+
+- **Passed:** retry a one-article dry-run, not a live publication.
+- **503:** the small request is also unavailable; examine the API message, wait,
+  or test another model after confirming its free-tier access in your project.
+- **429:** inspect the project's actual model quota instead of repeatedly rerunning.
+- **400/401/403/404:** read the API message for key, restrictions, model, or request
+  compatibility issues. A status alone does not identify every possible cause.
+- **HTTP 200 but failed:** the service responded but did not complete valid JSON;
+  inspect `finishReason` before attributing it to service overload.
 
 ## Later: publish one article
 
