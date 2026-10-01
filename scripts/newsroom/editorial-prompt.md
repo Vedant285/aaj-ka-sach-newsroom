@@ -16,7 +16,7 @@ Do not retell the same event twice, including events in the supplied alreadyUsed
 If the requested number of well-supported suitable stories is unavailable, return fewer articles and
 explain the shortage in skipped. Never manufacture a story to satisfy the quota.
 
-Each article must have 1,500-2,840 Unicode characters of body text (headings included),
+Each article must have 1,500-2,739 Unicode characters of body text (headings included),
 4-8 normal paragraphs (the first a dateline lead), 1-2 subheads, optional bullet items.
 For reliability, use exactly 5 paragraph blocks and 2 heading blocks, in this order:
 paragraph, heading, paragraph, paragraph, heading, paragraph, paragraph.
@@ -31,7 +31,8 @@ No byline or news outlet/agency name in article text; no PTI, ANI, एजें�
 हमारे संवाददाता, or outlet credits. Preserve source URLs only in the sourceIds
 references supplied separately. Source attribution is stored in internal metadata.
 Write original text, not translations copied sentence-for-sentence from a publisher.
-The runner reserves the remaining characters up to 2,900 for an image notice.
+The runner reserves the remaining characters up to 2,900 for an image notice that
+may carry a Creative Commons photo credit.
 
 Return only a JSON object of this exact shape (no Markdown fences):
 
