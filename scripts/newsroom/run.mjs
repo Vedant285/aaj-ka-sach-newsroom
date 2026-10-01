@@ -111,10 +111,11 @@ function reportMarkdown(report) {
     lines.push(`- ${safe(article.title)}`);
     for (const source of article.sources ?? article.newsroom?.sources ?? []) lines.push(`  - Source: ${safe(source.url)}`);
     const image = article.image ?? article.newsroom?.image;
-    if (image?.kind === 'headline-card' && /^headline-card-[a-z]+-\d+\.png$/.test(image.fileName)) {
-      lines.push(`  - Headline card: ${image.fileName}; original graphic, not an event photograph.`, '', `![Headline card](./${image.fileName})`, '');
-    } else if (image) {
+    if (image) {
       lines.push(`  - Image: ${safe(image.pageUrl)}; ${safe(image.license)}; creator: ${safe(image.creator)}`);
+      lines.push(image.attribution
+        ? `  - Credit REQUIRED, published as: ${safe(image.attribution)}`
+        : '  - No credit required (CC0 / public domain).');
       if (/^photo-[a-z]+-\d+\.(png|jpg|webp)$/.test(image.fileName ?? '')) lines.push('', `![Representative photo](./${image.fileName})`, '');
     } else lines.push('  - No image: article is ready for text-only publication.');
   }
