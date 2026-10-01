@@ -5,6 +5,7 @@ import { XMLParser } from 'fast-xml-parser';
 
 export const CATEGORIES = ['up', 'uk', 'delhi', 'world', 'dharma', 'business', 'sports', 'others', 'mystery', 'lifestyle'];
 const SOURCE_DOMAINS = ['amarujala.com', 'jagran.com', 'bbc.co.uk', 'bbci.co.uk', 'bbc.com', 'sciencedaily.com', 'nasa.gov'];
+export const IMAGE_DOMAINS = ['upload.wikimedia.org', 'thumb.wikimedia.org'];
 export const hash = (text) => createHash('sha256').update(text).digest('hex').slice(0, 24);
 export const dayInIndia = (date = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 export function batchPlan(count = 20, category = 'up') {
@@ -223,9 +224,22 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
 export function eligibleImage(info) {
   const metadata = info.extmetadata ?? {};
   const license = plainText(metadata.LicenseShortName?.value);
-  return ['Public domain', 'CC0'].includes(license)
-    && metadata.Copyrighted?.value === 'False'
-    && metadata.AttributionRequired?.value !== 'True'
+  let cc0License = false;
+  if (license === 'CC0') {
+    try {
+      const licenseUrl = new URL(plainText(metadata.LicenseUrl?.value));
+      cc0License = ['https:', 'http:'].includes(licenseUrl.protocol)
+        && licenseUrl.hostname === 'creativecommons.org'
+        && !licenseUrl.username && !licenseUrl.password && !licenseUrl.port
+        && /^\/publicdomain\/zero\/1\.0(?:\/|$)/.test(licenseUrl.pathname);
+    } catch { cc0License = false; }
+  }
+  const publicDomain = license === 'Public domain' && plainText(metadata.Copyrighted?.value).toLowerCase() === 'false';
+  const attribution = plainText(metadata.AttributionRequired?.value).toLowerCase();
+  const nonFree = plainText(metadata.NonFree?.value).toLowerCase();
+  return (cc0License || publicDomain)
+    && ['', 'false', '0'].includes(attribution)
+    && ['', 'false', '0'].includes(nonFree)
     && !plainText(metadata.Restrictions?.value)
     && ['image/jpeg', 'image/png', 'image/webp'].includes(info.mime)
     && info.width >= 800;
@@ -249,7 +263,7 @@ export async function findImage(query, fallbackQueries = []) {
     for (const page of pages) {
       const info = page.imageinfo?.[0];
       if (!info || !eligibleImage(info)) continue;
-      const download = safeUrl(info.thumburl ?? info.url, ['upload.wikimedia.org']).href;
+      const download = safeUrl(info.thumburl ?? info.url, IMAGE_DOMAINS).href;
       return {
         title: page.title, download, pageUrl: safeUrl(info.descriptionurl, ['commons.wikimedia.org']).href,
         license: plainText(info.extmetadata.LicenseShortName.value),
