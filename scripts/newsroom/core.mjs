@@ -48,6 +48,7 @@ export function canonicalSource(value) {
 export class QuotaError extends Error {}
 export class ArticleStructureError extends Error {}
 export class ArticleLengthError extends Error {}
+export class ArticleEvidenceError extends Error {}
 
 export async function request(url, { domains, label, retries = 2, maxBytes = 3_000_000, ...options }) {
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -223,7 +224,7 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     const bodyCharacters = characterCount(body);
     const totalCharacters = bodyCharacters + 1 + IMAGE_NOTICE_BUDGET;
     if (bodyCharacters < 1500 || totalCharacters > 2900) {
-      throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters}, includingImageNotice=${totalCharacters} Unicode characters). Body must contain at least 1500 characters; body plus the reserved ${IMAGE_NOTICE_BUDGET}-character image credit must not exceed 2900. Revise toward 2000-2400 body characters using only supplied source facts.`);
+      throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters}, includingImageNotice=${totalCharacters} Unicode characters). Body must contain at least 1500 characters; body plus the reserved ${IMAGE_NOTICE_BUDGET}-character image notice must not exceed 2900. Revise toward 2100-2500 body characters using only supplied source facts, and leave every evidence quote exactly as it is.`);
     }
     const visible = [article.title, article.district, ...article.tags, body].join(' ');
     assert(!/[a-z]/i.test(visible) && /[\u0900-\u097f]/.test(visible), `${category}: article must use Devanagari, not Latin text`);
@@ -233,7 +234,14 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     for (const sourceId of article.sourceIds) {
       assert(sourceMap.has(sourceId) && !used.has(sourceId), `${category}: unknown or already used source`);
       const proof = article.evidence.find((item) => item.sourceId === sourceId);
-      assert(proof && typeof proof.quote === 'string' && proof.quote.length >= 30 && proof.quote.length <= 180 && sourceMap.get(sourceId).text.includes(proof.quote), `${category}: evidence is not present verbatim in the source`);
+      // Match on the normalized quote. extractArticle already collapsed the source's
+      // whitespace, so a model that re-wraps or double-spaces its excerpt is quoting
+      // correctly and must not lose the article over it. The substring match itself
+      // stays exact — that is what proves the article is grounded in the source.
+      const quote = normalize(typeof proof?.quote === 'string' ? proof.quote : '');
+      if (!(characterCount(quote) >= 30 && characterCount(quote) <= 180 && sourceMap.get(sourceId).text.includes(quote))) {
+        throw new ArticleEvidenceError(`${category}: evidence for source ${sourceId} is not an exact quote from that source. Copy 30-180 characters straight out of that source's supplied text, unchanged.`);
+      }
       used.add(sourceId);
     }
     return {

@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  CATEGORIES, batchPlan, characterCount, creditFreeLicense, eligibleImage, IMAGE_NOTICE_BUDGET,
-  imageNotice, makeDocument, photoScore, portableText, similarTitle, verifyPosts,
+  ArticleEvidenceError, CATEGORIES, batchPlan, characterCount, creditFreeLicense, eligibleImage, IMAGE_NOTICE_BUDGET,
+  imageNotice, makeDocument, photoScore, portableText, similarTitle, validateArticles, verifyPosts,
 } from './core.mjs';
 
 // Offline only: no network, no credentials. Run with `npm test`.
@@ -121,4 +121,35 @@ test('every category has at least one configured feed and none is shared', async
       seen.set(url, category);
     }
   }
+});
+
+const SOURCE_ID = 'abcdef0123456789abcdef01';
+const SOURCE_TEXT = 'लखनऊ के किसानों ने इस वर्ष गेहूं की नई किस्म अपनाई है जिससे पैदावार में उल्लेखनीय वृद्धि दर्ज की गई है।';
+const QUOTE = 'गेहूं की नई किस्म अपनाई है जिससे पैदावार में उल्लेखनीय वृद्धि';
+
+const payloadFor = (quote) => ({
+  articles: [{
+    title: 'गेहूं की नई किस्म से किसानों की पैदावार बढ़ी',
+    slug: 'wheat-variety-yield', district: '', tags: ['गेहूं', 'किसान', 'पैदावार'],
+    sourceIds: [SOURCE_ID], evidence: [{ sourceId: SOURCE_ID, quote }], imageQueries: ['wheat farming'],
+    blocks: [{ type: 'paragraph', text: paragraph }, { type: 'heading', text: 'उपशीर्षक' },
+      { type: 'paragraph', text: paragraph }, { type: 'paragraph', text: paragraph },
+      { type: 'heading', text: 'दूसरा' }, { type: 'paragraph', text: paragraph }],
+  }],
+  skipped: [],
+});
+const validate = (quote) => validateArticles(payloadFor(quote), 'up', [{ id: SOURCE_ID, url: 'https://www.amarujala.com/a', title: 'स', text: SOURCE_TEXT }], [], 1);
+
+test('evidence must be a real quote, but re-wrapped whitespace is still a real quote', () => {
+  assert.equal(validate(QUOTE)[0].sourceIds[0], SOURCE_ID);
+  // The source text is whitespace-normalized on extraction, so a model that re-wraps
+  // its excerpt is quoting correctly and must not lose the article over it.
+  assert.ok(validate(`  ${QUOTE.replace(' ', '\n  ')}  `));
+});
+
+test('a paraphrased quote is rejected, and the rejection is retryable', () => {
+  // Retryable matters as much as rejected: this failure arrived on the correction
+  // attempt, where a plain Error killed the category outright.
+  assert.throws(() => validate('गेहूं की एक नई किस्म से पैदावार में भारी वृद्धि हुई है'), ArticleEvidenceError);
+  assert.throws(() => validate(QUOTE.slice(0, 12)), ArticleEvidenceError);
 });
