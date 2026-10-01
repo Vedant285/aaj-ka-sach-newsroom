@@ -200,7 +200,7 @@ export async function main(args = process.argv.slice(2)) {
           article.sourceIds.forEach((sourceId) => used.add(sourceId));
           alreadyUsed.push(article.title);
           report.articles.push(article);
-          article.image = await findImage(article.imageQuery);
+          article.image = await findImage(article.imageQuery, article.imageFallbackQueries);
         }
       } catch (error) {
         const warning = error.message.startsWith(`${category}:`) ? error.message : `${category}: ${error.message}`;
