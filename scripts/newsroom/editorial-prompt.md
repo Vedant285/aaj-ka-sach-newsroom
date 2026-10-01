@@ -11,7 +11,13 @@ Select exactly requestedArticleCount DIFFERENT positive / constructive stories f
 category: development, achievement, relief, culture, science, festivals, sports
 wins, or human interest. No crime, deaths, communal conflict, tragedy, or speculation.
 For mystery, use evidence-based discoveries, not supernatural claims as facts.
-National/international fallback sources may be used when local coverage is insufficient.
+A few supplied sources may be general or national news carried only as a fallback.
+Use one only if it genuinely belongs in the requested category. For a place category
+(up, uk, delhi) a national story with real bearing on that place is acceptable. For a
+topic category (lifestyle, business, sports, dharma, mystery) general news is NOT a
+substitute: politics, elections, electoral rolls, courts and administration do not
+belong under lifestyle. Prefer returning fewer articles, explained in skipped, over an
+article that does not fit the requested category.
 Do not retell the same event twice, including events in the supplied alreadyUsed list.
 If the requested number of well-supported suitable stories is unavailable, return fewer articles and
 explain the shortage in skipped. Never manufacture a story to satisfy the quota.
