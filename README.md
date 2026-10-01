@@ -110,13 +110,16 @@ query is recorded in image metadata; exhausted searches report their search and
 candidate counts. These are representative images: manually review relevance and
 licensing before publishing. If every search fails, publication still stops.
 
-If the response has malformed block objects or the wrong paragraph/subheading
-structure, the runner prints the offending block index and field requirement or
-the actual counts and allows **one structural correction request per category**. This
+If the response has malformed block objects, the wrong paragraph/subheading
+structure, or an out-of-range body length, the runner prints the offending block
+requirement or actual counts and allows **one format/length correction request per
+category in total**, not one per error type. Length diagnostics include Unicode
+character counts before and after the image notice. The body still needs at least
+1,500 characters, with at most 2,900 including the notice. This correction
 consumes additional Gemini quota and uses the same request pacing. The corrected
 article must pass every original validation rule. It does not retry missing-story,
-length, evidence, image, or other validation failures as structural corrections.
-Repeated structure failures stop that category; the runner never loops indefinitely.
+evidence, image, or other validation failures as format/length corrections.
+Any remaining validation failure stops that category; the runner never loops indefinitely.
 The final category failure is printed in the Actions log as well as the report.
 
 After uploading code fixes to GitHub, start a **new run** using **Actions > Daily
