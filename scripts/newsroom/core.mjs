@@ -4,7 +4,7 @@ import { load } from 'cheerio';
 import { XMLParser } from 'fast-xml-parser';
 
 export const CATEGORIES = ['up', 'uk', 'delhi', 'world', 'dharma', 'business', 'sports', 'others', 'mystery', 'lifestyle'];
-const SOURCE_DOMAINS = ['amarujala.com', 'jagran.com', 'bbc.co.uk', 'bbci.co.uk', 'bbc.com', 'sciencedaily.com', 'nasa.gov'];
+const SOURCE_DOMAINS = ['amarujala.com', 'bhaskar.com', 'abplive.com', 'bbc.co.uk', 'bbci.co.uk', 'bbc.com', 'sciencedaily.com', 'nasa.gov'];
 export const IMAGE_DOMAINS = ['upload.wikimedia.org', 'thumb.wikimedia.org'];
 // Characters reserved in the body budget for the image notice, which now carries
 // the Creative Commons credit required by CC BY / CC BY-SA.
@@ -124,9 +124,13 @@ export function parseFeed(xml, now) {
 export function extractArticle(html) {
   const page = load(html);
   page('script, style, nav, header, footer, aside, form, noscript, iframe').remove();
+  const paragraphs = (scope) => normalize(scope.find('p').map((index, element) => page(element).text()).get().join(' '));
   const article = page('article').first();
-  const container = article.length ? article : page('main').first();
-  const text = normalize(container.find('p').map((index, element) => page(element).text()).get().join(' '));
+  let text = paragraphs(article.length ? article : page('main').first());
+  // Some publishers put the body outside <article>/<main>. Fall back to the whole
+  // page only when the scoped container came up short, so this can never regress
+  // a site that already parses cleanly.
+  if (characterCount(text) < 1200) text = paragraphs(page('body'));
   assert(characterCount(text) >= 1200, 'Source has insufficient readable article text');
   return Array.from(text).slice(0, 7000).join('');
 }
@@ -198,7 +202,7 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     }
     const visible = [article.title, article.district, ...article.tags, body].join(' ');
     assert(!/[a-z]/i.test(visible) && /[\u0900-\u097f]/.test(visible), `${category}: article must use Devanagari, not Latin text`);
-    assert(!/एजेंसी|हमारे संवाददाता|पीटीआई|एएनआई|अमर उजाला|दैनिक जागरण|बीबीसी|एनडीटीवी/.test(visible), `${category}: outlet credit or byline in copy`);
+    assert(!/एजेंसी|हमारे संवाददाता|पीटीआई|एएनआई|अमर उजाला|दैनिक जागरण|दैनिक भास्कर|भास्कर|एबीपी|बीबीसी|एनडीटीवी/.test(visible), `${category}: outlet credit or byline in copy`);
     assert(Array.isArray(article.sourceIds) && article.sourceIds.length >= 1 && article.sourceIds.length <= 3 && new Set(article.sourceIds).size === article.sourceIds.length, `${category}: invalid source references`);
     assert(Array.isArray(article.evidence), `${category}: missing evidence`);
     for (const sourceId of article.sourceIds) {
