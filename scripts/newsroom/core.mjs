@@ -199,11 +199,13 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
       used.add(sourceId);
     }
     assert(typeof article.imageQuery === 'string' && article.imageQuery.length >= 3 && article.imageQuery.length <= 120, `${category}: invalid image query`);
+    const imageFallbackQueries = article.imageFallbackQueries ?? [];
+    assert(Array.isArray(imageFallbackQueries) && imageFallbackQueries.length <= 2 && imageFallbackQueries.every((query) => typeof query === 'string' && query.trim().length >= 3 && query.length <= 120), `${category}: invalid image fallback queries`);
     return {
       title: article.title, slug: article.slug, district: article.district, tags: article.tags,
       blocks: article.blocks.map(({ type, text }) => ({ type, text })), category,
       sourceIds: article.sourceIds, evidence: article.evidence.filter((item) => article.sourceIds.includes(item.sourceId)).map(({ sourceId, quote }) => ({ sourceId, quote })),
-      imageQuery: article.imageQuery,
+      imageQuery: article.imageQuery, imageFallbackQueries,
       sources: article.sourceIds.map((sourceId) => {
         const { text: omitted, ...metadata } = sourceMap.get(sourceId);
         void omitted;
@@ -224,27 +226,35 @@ export function eligibleImage(info) {
     && info.width >= 800;
 }
 
-export async function findImage(query) {
-  const url = new URL('https://commons.wikimedia.org/w/api.php');
-  url.search = new URLSearchParams({
-    action: 'query', format: 'json', generator: 'search', gsrsearch: `${query} filetype:bitmap`,
-    gsrnamespace: '6', gsrlimit: '20', prop: 'imageinfo', iiprop: 'url|extmetadata|mime|size', iiurlwidth: '1280',
-  });
-  const result = await requestJson(url, { domains: ['commons.wikimedia.org'], label: 'Commons search' });
-  const pages = Object.values(result.query?.pages ?? {}).sort((first, second) => first.index - second.index);
-  for (const page of pages) {
-    const info = page.imageinfo?.[0];
-    if (!info || !eligibleImage(info)) continue;
-    const download = safeUrl(info.thumburl ?? info.url, ['upload.wikimedia.org']).href;
-    return {
-      title: page.title, download, pageUrl: safeUrl(info.descriptionurl, ['commons.wikimedia.org']).href,
-      license: plainText(info.extmetadata.LicenseShortName.value),
-      creator: plainText(info.extmetadata.Artist?.value),
-      licenseUrl: plainText(info.extmetadata.LicenseUrl?.value),
-      caption: 'प्रतीकात्मक तस्वीर',
-    };
+export async function findImage(query, fallbackQueries = []) {
+  assert(typeof query === 'string' && query.trim().length >= 3 && query.length <= 120, 'Invalid image query');
+  assert(Array.isArray(fallbackQueries) && fallbackQueries.length <= 2 && fallbackQueries.every((value) => typeof value === 'string' && value.trim().length >= 3 && value.length <= 120), 'Invalid image fallback queries');
+  const queries = [...new Set([query, ...fallbackQueries].map(normalize))];
+  let candidates = 0;
+  for (const searchQuery of queries) {
+    const url = new URL('https://commons.wikimedia.org/w/api.php');
+    url.search = new URLSearchParams({
+      action: 'query', format: 'json', generator: 'search', gsrsearch: `${searchQuery} filetype:bitmap`,
+      gsrnamespace: '6', gsrlimit: '50', prop: 'imageinfo', iiprop: 'url|extmetadata|mime|size', iiurlwidth: '1280',
+    });
+    const result = await requestJson(url, { domains: ['commons.wikimedia.org'], label: 'Commons search' });
+    assert(!result.error, 'Commons search: API error; image search did not complete');
+    const pages = Object.values(result.query?.pages ?? {}).sort((first, second) => first.index - second.index);
+    candidates += pages.length;
+    for (const page of pages) {
+      const info = page.imageinfo?.[0];
+      if (!info || !eligibleImage(info)) continue;
+      const download = safeUrl(info.thumburl ?? info.url, ['upload.wikimedia.org']).href;
+      return {
+        title: page.title, download, pageUrl: safeUrl(info.descriptionurl, ['commons.wikimedia.org']).href,
+        license: plainText(info.extmetadata.LicenseShortName.value),
+        creator: plainText(info.extmetadata.Artist?.value),
+        licenseUrl: plainText(info.extmetadata.LicenseUrl?.value),
+        caption: 'प्रतीकात्मक तस्वीर', searchQuery,
+      };
+    }
   }
-  throw new Error('No suitable CC0/public-domain image; review or broaden the image query');
+  throw new Error(`No suitable CC0/public-domain image after ${queries.length} search(es), ${candidates} candidate(s); review or broaden the image queries`);
 }
 
 export function portableText(article) {
