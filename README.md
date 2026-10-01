@@ -98,27 +98,37 @@ issues, screenshots, or source code, and never prefix it with `NEXT_PUBLIC_`.
 
 The one-article run generates only the selected category and normally makes one
 Gemini generation request. It may retry transient API errors, so it is not a promise
-of exactly one billable/quota-counted request. It also fetches source articles and
-Commons image metadata. Dry-run consumes API quota but uploads no assets and creates
-no posts. If no suitable supported story or image exists, it fails rather than inventing one.
+of exactly one billable/quota-counted request. It also fetches source articles.
+Dry-run consumes API quota but uploads no assets and creates no posts. If no suitable
+supported story exists, it fails rather than inventing one.
 
-Image selection checks up to 50 Commons candidates per query and tries up to two
-broader, topic-related fallback queries supplied in the original Gemini response.
-Fallback searches do not require extra Gemini calls. All searches retain the same
-CC0/public-domain, dimensions, file-type, and restriction checks. The selected
-query is recorded in image metadata; exhausted searches report their search and
-candidate counts. These are representative images: manually review relevance and
-licensing before publishing. If every search fails, publication still stops.
+## Headline cards (default)
 
-CC0 selection requires both the exact CC0 licence label and an official
-`creativecommons.org/publicdomain/zero/1.0/` licence URL. Commons can return
-`Copyrighted: True` for CC0-labelled files; that flag alone no longer rejects them.
-Public-domain-labelled files still require `Copyrighted: False`. Attribution and
-non-free flags are checked case-insensitively; affirmative or unknown values are
-rejected. This does not enable CC BY, CC BY-SA, or unspecified licences.
-Image selection and downloads share an allowlist for Wikimedia's original-file
-host (`upload.wikimedia.org`) and thumbnail host (`thumb.wikimedia.org`), while
-retaining HTTPS, redirect-host, file-type, and download-size checks.
+Every validated article gets an original 1200 x 630 PNG with आज का सच branding,
+the full Hindi headline, category, location and IST run date. Text is rendered with
+the bundled Noto Sans Devanagari font, not an AI image generator. No extra Gemini
+request, Commons search, source-photo download, or image API key is needed.
+
+Download the Actions artifact and extract it to preview `headline-card-*.png`
+alongside `report.json`, `report.md` and `documents.json`. The report includes a
+relative preview link. Cards are labelled समाचार सार, not actual event photographs;
+the article body receives the same distinction. Headlines wrap and shrink to fit;
+unrenderable text fails safely rather than being silently cropped.
+
+Source photos are not automatically copied. Watermark absence is not treated as
+permission. A future approved-photo path must verify reuse rights and attribution;
+until then the original card is the safe default. Legacy Commons helpers remain
+available in code but are not used by the newsroom workflow.
+
+Publish uploads the exact PNG bytes generated during that run, after hash and PNG
+checks and only after all articles/cards validate. Dry-run never uploads. As before,
+a later publish run generates fresh articles/cards; it does not promote an earlier
+reviewed artifact. Review remains necessary; do not enable unattended publication
+merely because the card renderer works.
+
+The font and its OFL licence must be uploaded together from `scripts/newsroom/assets`.
+Install dependencies with the existing workflow's `npm ci --ignore-scripts` step;
+no workflow or secret changes are required. See [font provenance](./scripts/newsroom/assets/README.md).
 
 If the response has malformed block objects, the wrong paragraph/subheading
 structure, or an out-of-range body length, the runner prints the offending block
@@ -241,11 +251,9 @@ Using `npm.cmd` avoids PowerShell execution-policy issues with `npm.ps1`.
   slugs/tags, source references, and exact evidence excerpts. Evidence proves text
   was supplied, not that every generated claim is correct. Review factual accuracy,
   positivity, originality, and image relevance yourself.
-- Accept Commons metadata only for verified CC0-labelled or public-domain bitmaps
-  without mandatory attribution, non-free flags, or listed restrictions. Images are labelled
-  representative in the published body. Retain creator, licence, and source records.
-  Metadata is not a guarantee against other legal or personality-rights restrictions.
-  CC BY/CC BY-SA support requires a public attribution implementation first.
+- Render original headline cards without downloading publisher photos. Include a
+  news-summary label, preserve the complete headline, and check PNG hashes before
+  uploading. Cards do not establish factual accuracy; review the underlying article.
 - All required articles/images must pass before Sanity uploads. A single transaction
   uses `createIfNotExists`; uncertain writes are checked rather than blindly retried.
   Failed uploads can leave unused assets but not a partially published article batch.

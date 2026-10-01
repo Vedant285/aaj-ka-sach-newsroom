@@ -6,6 +6,7 @@ import { XMLParser } from 'fast-xml-parser';
 export const CATEGORIES = ['up', 'uk', 'delhi', 'world', 'dharma', 'business', 'sports', 'others', 'mystery', 'lifestyle'];
 const SOURCE_DOMAINS = ['amarujala.com', 'jagran.com', 'bbc.co.uk', 'bbci.co.uk', 'bbc.com', 'sciencedaily.com', 'nasa.gov'];
 export const IMAGE_DOMAINS = ['upload.wikimedia.org', 'thumb.wikimedia.org'];
+export const HEADLINE_CARD_NOTICE = 'चित्र: समाचार सार — वास्तविक घटना की तस्वीर नहीं।';
 export const hash = (text) => createHash('sha256').update(text).digest('hex').slice(0, 24);
 export const dayInIndia = (date = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 export function batchPlan(count = 20, category = 'up') {
@@ -189,7 +190,7 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     }
     const body = article.blocks.map((block) => block.text).join('\n');
     const bodyCharacters = characterCount(body);
-    const totalCharacters = characterCount(`${body}\nचित्र: प्रतीकात्मक तस्वीर।`);
+    const totalCharacters = characterCount(`${body}\n${HEADLINE_CARD_NOTICE}`);
     if (bodyCharacters < 1500 || totalCharacters > 2900) {
       throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters}, includingImageNotice=${totalCharacters} Unicode characters). Body must contain at least 1500 characters; body including the image notice must not exceed 2900. Revise toward 2000-2400 body characters using only supplied source facts.`);
     }
@@ -204,14 +205,10 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
       assert(proof && typeof proof.quote === 'string' && proof.quote.length >= 30 && proof.quote.length <= 180 && sourceMap.get(sourceId).text.includes(proof.quote), `${category}: evidence is not present verbatim in the source`);
       used.add(sourceId);
     }
-    assert(typeof article.imageQuery === 'string' && article.imageQuery.length >= 3 && article.imageQuery.length <= 120, `${category}: invalid image query`);
-    const imageFallbackQueries = article.imageFallbackQueries ?? [];
-    assert(Array.isArray(imageFallbackQueries) && imageFallbackQueries.length <= 2 && imageFallbackQueries.every((query) => typeof query === 'string' && query.trim().length >= 3 && query.length <= 120), `${category}: invalid image fallback queries`);
     return {
       title: article.title, slug: article.slug, district: article.district, tags: article.tags,
       blocks: article.blocks.map(({ type, text }) => ({ type, text })), category,
       sourceIds: article.sourceIds, evidence: article.evidence.filter((item) => article.sourceIds.includes(item.sourceId)).map(({ sourceId, quote }) => ({ sourceId, quote })),
-      imageQuery: article.imageQuery, imageFallbackQueries,
       sources: article.sourceIds.map((sourceId) => {
         const { text: omitted, ...metadata } = sourceMap.get(sourceId);
         void omitted;
@@ -277,7 +274,7 @@ export async function findImage(query, fallbackQueries = []) {
 }
 
 export function portableText(article) {
-  return [...article.blocks, { type: 'paragraph', text: 'चित्र: प्रतीकात्मक तस्वीर।' }].map((block, index) => ({
+  return [...article.blocks, { type: 'paragraph', text: article.image?.kind === 'headline-card' ? HEADLINE_CARD_NOTICE : 'चित्र: प्रतीकात्मक तस्वीर।' }].map((block, index) => ({
     _type: 'block', _key: `block-${index}`, style: block.type === 'heading' ? 'h3' : 'normal', markDefs: [],
     ...(block.type === 'bullet' ? { listItem: 'bullet', level: 1 } : {}),
     children: [{ _type: 'span', _key: `span-${index}`, marks: [], text: block.text }],
@@ -290,7 +287,7 @@ export function makeDocument(article, index, day, now, assetId, plan = batchPlan
     _id: `${plan.prefix}-${day}-${article.category}-${slot}`, _type: 'post',
     title: article.title, slug: { _type: 'slug', current: `${article.slug}-${article.sourceIds[0].slice(0, 8)}` },
     category: article.category, district: article.district, tags: article.tags, body: portableText(article),
-    mainImage: { _type: 'image', asset: { _type: 'reference', _ref: assetId } },
+    mainImage: { _type: 'image', asset: { _type: 'reference', _ref: assetId }, ...(article.image?.kind === 'headline-card' ? { alt: article.title, caption: article.image.caption } : {}) },
     editorialStatus: 'approved', webPriority: 60, isBreaking: false,
     publishedAt: new Date(now.getTime() - (plan.count - 1 - index) * 1000).toISOString(),
     newsroom: { day, batchSize: plan.count, sourceIds: article.sourceIds, sources: article.sources, evidence: article.evidence, image: article.image },

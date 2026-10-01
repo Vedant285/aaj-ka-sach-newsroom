@@ -4,6 +4,7 @@
   "type": "module",
   "engines": { "node": ">=22.12.0" },
   "dependencies": {
+    "@napi-rs/canvas": "1.0.9",
     "cheerio": "1.2.0",
     "fast-xml-parser": "5.11.2"
   }

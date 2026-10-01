@@ -3,8 +3,10 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { load } from 'cheerio';
+import { createHash } from 'node:crypto';
+import { renderHeadlineCard } from './headline-card.mjs';
 import {
-  CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, assert, batchPlan, collectSources, dayInIndia, findImage, makeDocument,
+  CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, assert, batchPlan, collectSources, dayInIndia, makeDocument,
   IMAGE_DOMAINS, normalize, postIds, request, requestJson, validateArticles, verifyPosts,
 } from './core.mjs';
 
@@ -40,9 +42,17 @@ export function sanityClient(config) {
       assert(!result.error && result.result !== undefined, 'Sanity query failed');
       return result.result;
     },
-    async upload(image) {
+    async upload(image, generatedBytes) {
       assert(config.token, 'Publishing requires SANITY_API_TOKEN');
-      const downloaded = await request(image.download, { domains: IMAGE_DOMAINS, label: 'Image download', maxBytes: 12_000_000 });
+      let downloaded;
+      if (image.kind === 'headline-card') {
+        assert(Buffer.isBuffer(generatedBytes) && generatedBytes.length > 8 && generatedBytes.length <= 12_000_000, 'Missing or oversized generated image');
+        assert(generatedBytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), 'Generated image is not PNG');
+        assert(createHash('sha256').update(generatedBytes).digest('hex') === image.sha256, 'Generated image integrity check failed');
+        downloaded = { bytes: generatedBytes, type: 'image/png' };
+      } else {
+        downloaded = await request(image.download, { domains: IMAGE_DOMAINS, label: 'Image download', maxBytes: 12_000_000 });
+      }
       const type = downloaded.type.split(';')[0];
       assert(['image/jpeg', 'image/png', 'image/webp'].includes(type), 'Downloaded image has unsupported content type');
       const result = await requestJson(`${base}/assets/images/${config.dataset}`, {
@@ -110,7 +120,9 @@ function reportMarkdown(report) {
     lines.push(`- ${safe(article.title)}`);
     for (const source of article.sources ?? article.newsroom?.sources ?? []) lines.push(`  - Source: ${safe(source.url)}`);
     const image = article.image ?? article.newsroom?.image;
-    if (image) lines.push(`  - Image: ${safe(image.pageUrl)}; ${safe(image.license)}; creator: ${safe(image.creator)}`);
+    if (image?.kind === 'headline-card' && /^headline-card-[a-z]+-\d+\.png$/.test(image.fileName)) {
+      lines.push(`  - Headline card: ${image.fileName}; original graphic, not an event photograph.`, '', `![Headline card](./${image.fileName})`, '');
+    } else if (image) lines.push(`  - Image: ${safe(image.pageUrl)}; ${safe(image.license)}; creator: ${safe(image.creator)}`);
   }
   lines.push('', '## Warnings / failures', ...report.warnings.map((warning) => `- ${safe(warning)}`));
   if (report.error) lines.push(`- ${safe(report.error)}`);
@@ -140,6 +152,7 @@ export async function main(args = process.argv.slice(2)) {
   await mkdir(output, { recursive: true });
   const report = { day, mode, requestedCount: plan.count, categories: plan.categories, status: 'started', articles: [], warnings: [], verification: {} };
   const client = sanityClient(config);
+  const generatedImages = new Map();
   const ids = postIds(day, plan);
   const getBatch = () => client.query('*[_id in $ids]', { ids });
   const writeReport = async () => {
@@ -200,7 +213,11 @@ export async function main(args = process.argv.slice(2)) {
           article.sourceIds.forEach((sourceId) => used.add(sourceId));
           alreadyUsed.push(article.title);
           report.articles.push(article);
-          article.image = await findImage(article.imageQuery, article.imageFallbackQueries);
+          const fileName = `headline-card-${article.category}-${report.articles.length}.png`;
+          const card = await renderHeadlineCard(article, day, fileName);
+          await writeFile(resolve(output, fileName), card.bytes);
+          generatedImages.set(fileName, card.bytes);
+          article.image = card.image;
         }
       } catch (error) {
         const warning = error.message.startsWith(`${category}:`) ? error.message : `${category}: ${error.message}`;
@@ -224,7 +241,8 @@ export async function main(args = process.argv.slice(2)) {
     const slugConflicts = await client.query('*[_type == "post" && slug.current in $slugs]{_id}', { slugs: documents.map((document) => document.slug.current) });
     assert(slugConflicts.length === 0, 'An article slug already exists; inspect the conflict before publishing');
     for (let index = 0; index < documents.length; index++) {
-      documents[index].mainImage.asset._ref = await client.upload(report.articles[index].image);
+      const image = report.articles[index].image;
+      documents[index].mainImage.asset._ref = await client.upload(image, generatedImages.get(image.fileName));
       await writeFile(resolve(output, 'documents.json'), JSON.stringify(documents, null, 2));
     }
     assert(dayInIndia() === day, 'IST date changed during uploads; refusing publication');
