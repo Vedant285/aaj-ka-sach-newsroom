@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   ArticleEvidenceError, CATEGORIES, batchPlan, characterCount, creditFreeLicense, eligibleImage, IMAGE_NOTICE_BUDGET,
-  imageNotice, makeDocument, photoScore, portableText, similarTitle, validateArticles, verifyPosts,
+  imageNotice, interleaveByRank, makeDocument, photoScore, portableText, similarTitle, validateArticles, verifyPosts,
 } from './core.mjs';
 
 // Offline only: no network, no credentials. Run with `npm test`.
@@ -121,6 +121,23 @@ test('every category has at least one configured feed and none is shared', async
       seen.set(url, category);
     }
   }
+});
+
+test('a high-volume feed cannot starve a lower-volume feed on the same subject', () => {
+  // BBC Sport publishes constantly; Bhaskar sports does not. A flat date sort gave BBC
+  // every fetch slot, so a Hindi category was sourced entirely from English wire copy
+  // and no Hindi evidence quote could ever be an exact substring of its source.
+  const bbc = Array.from({ length: 40 }, (unused, index) => `bbc-${index}`);
+  const bhaskar = ['bhaskar-0', 'bhaskar-1'];
+  const ordered = interleaveByRank([bhaskar, bbc], 10);
+  assert.equal(ordered.length, 10);
+  // Feed order in feeds.json decides who leads within a rank: Bhaskar is listed first.
+  assert.deepEqual(ordered.slice(0, 4), ['bhaskar-0', 'bbc-0', 'bhaskar-1', 'bbc-1']);
+  assert.equal(ordered.filter((id) => id.startsWith('bhaskar')).length, 2);
+  // An empty feed must not stall the round-robin or truncate the result.
+  assert.deepEqual(interleaveByRank([[], bhaskar, []], 10), bhaskar);
+  assert.deepEqual(interleaveByRank([], 10), []);
+  assert.equal(interleaveByRank([bbc], 6).length, 6);
 });
 
 const SOURCE_ID = 'abcdef0123456789abcdef01';

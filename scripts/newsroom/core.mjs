@@ -4,6 +4,10 @@ import { load } from 'cheerio';
 import { XMLParser } from 'fast-xml-parser';
 
 export const CATEGORIES = ['up', 'uk', 'delhi', 'world', 'dharma', 'business', 'sports', 'others', 'mystery', 'lifestyle'];
+// Place categories only. editorial-prompt.md accepts a national story with real bearing on
+// up/uk/delhi, but rules general news out as a substitute under a topic category, so only
+// these three may have a dry local feed topped up from the general-news pools.
+export const PLACE_CATEGORIES = new Set(['up', 'uk', 'delhi']);
 const SOURCE_DOMAINS = ['amarujala.com', 'bhaskar.com', 'abplive.com', 'bbc.co.uk', 'bbci.co.uk', 'bbc.com', 'sciencedaily.com', 'nasa.gov'];
 export const IMAGE_DOMAINS = ['upload.wikimedia.org', 'thumb.wikimedia.org'];
 // Characters reserved in the body budget for the image notice. Only credit-free
@@ -139,18 +143,39 @@ export function extractArticle(html) {
   return Array.from(text).slice(0, 7000).join('');
 }
 
+// Take one item from each feed in turn rather than the globally newest. Feed order within a
+// rank is the order in feeds.json, so the preferred feed leads.
+export function interleaveByRank(perFeed, limit) {
+  const ordered = [];
+  for (let rank = 0; ordered.length < limit; rank++) {
+    const row = perFeed.map((items) => items[rank]).filter(Boolean);
+    if (!row.length) break;
+    ordered.push(...row.slice(0, limit - ordered.length));
+  }
+  return ordered;
+}
+
 export async function collectSources(feedUrls, now, warnings, excluded = new Set()) {
-  const candidates = new Map();
+  const perFeed = [];
+  const seen = new Set(excluded);
   for (const url of feedUrls) {
     try {
       const result = await request(url, { domains: SOURCE_DOMAINS, label: 'RSS feed', retries: 1 });
+      const items = [];
       for (const source of parseFeed(result.bytes.toString('utf8'), now)) {
-        if (!excluded.has(source.id)) candidates.set(source.id, source);
+        if (seen.has(source.id)) continue;
+        seen.add(source.id);
+        items.push(source);
       }
+      perFeed.push(items.sort((first, second) => second.publishedAt.localeCompare(first.publishedAt)));
     } catch (error) { warnings.push(`Feed ${new URL(url).hostname}: ${error.message}`); }
   }
+  // Round-robin by rank, not one flat date sort. A high-volume feed fills every fetch slot
+  // under a date sort and a lower-volume feed on the same subject is never read at all:
+  // BBC Sport crowded out Bhaskar sports completely, leaving a Hindi category sourced
+  // entirely from English wire copy, and Bhaskar lifestyle did the same to ABP earlier.
   const sources = [];
-  for (const source of [...candidates.values()].sort((first, second) => second.publishedAt.localeCompare(first.publishedAt)).slice(0, 10)) {
+  for (const source of interleaveByRank(perFeed, 10)) {
     try {
       const result = await request(source.url, { domains: SOURCE_DOMAINS, label: 'Source article', retries: 0 });
       sources.push({ ...source, text: extractArticle(result.bytes.toString('utf8')) });
@@ -229,10 +254,20 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     const visible = [article.title, article.district, ...article.tags, body].join(' ');
     assert(!/[a-z]/i.test(visible) && /[\u0900-\u097f]/.test(visible), `${category}: article must use Devanagari, not Latin text`);
     assert(!/एजेंसी|हमारे संवाददाता|पीटीआई|एएनआई|अमर उजाला|दैनिक जागरण|दैनिक भास्कर|भास्कर|एबीपी|बीबीसी|एनडीटीवी/.test(visible), `${category}: outlet credit or byline in copy`);
-    assert(Array.isArray(article.sourceIds) && article.sourceIds.length >= 1 && article.sourceIds.length <= 3 && new Set(article.sourceIds).size === article.sourceIds.length, `${category}: invalid source references`);
+    // Retryable and specific. "invalid source references" told us nothing when a model that
+    // had been handed only off-topic sources returned an article citing none of them.
+    if (!Array.isArray(article.sourceIds) || !article.sourceIds.length) {
+      throw new ArticleStructureError(`${category}: sourceIds is missing or empty. Cite 1-3 IDs from the supplied source records, or return fewer articles and explain the shortage in skipped.`);
+    }
+    if (article.sourceIds.length > 3 || new Set(article.sourceIds).size !== article.sourceIds.length) {
+      throw new ArticleStructureError(`${category}: sourceIds must be 1-3 distinct IDs, got ${article.sourceIds.length} (${new Set(article.sourceIds).size} distinct).`);
+    }
     assert(Array.isArray(article.evidence), `${category}: missing evidence`);
     for (const sourceId of article.sourceIds) {
-      assert(sourceMap.has(sourceId) && !used.has(sourceId), `${category}: unknown or already used source`);
+      if (!sourceMap.has(sourceId)) {
+        throw new ArticleStructureError(`${category}: sourceId ${sourceId} is not one of the supplied source records. Use the IDs exactly as supplied; do not invent or abbreviate them.`);
+      }
+      assert(!used.has(sourceId), `${category}: source ${sourceId} was already used by another article`);
       const proof = article.evidence.find((item) => item.sourceId === sourceId);
       // Match on the normalized quote. extractArticle already collapsed the source's
       // whitespace, so a model that re-wraps or double-spaces its excerpt is quoting

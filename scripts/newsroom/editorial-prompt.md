@@ -86,7 +86,9 @@ paragraph and heading OBJECTS and check the combined body character length.
 Supply at least one exact evidence excerpt for EACH referenced source. Copy each quote
 character-for-character out of that source's supplied text: do not translate, paraphrase,
 re-punctuate, correct, shorten, or stitch together sentences that are not adjacent. A
-quote that is not an exact substring of its source costs the whole article. Evidence is
+quote that is not an exact substring of its source costs the whole article. Some sources
+are written in English; their quotes stay in English, character-for-character, even though
+the article you write from them is in Hindi. Evidence is never translated. Evidence is
 internal audit data, not part of the published body. Order multiple articles from
 less to more newsworthy. Real photos will be labelled representative, not event photos.
 

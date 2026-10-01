@@ -5,7 +5,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
 import {
-  CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, ArticleEvidenceError, assert, batchPlan, collectSources, dayInIndia, makeDocument,
+  CATEGORIES, PLACE_CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, ArticleEvidenceError, assert, batchPlan, collectSources, dayInIndia, makeDocument,
   IMAGE_DOMAINS, findImage, imageContentType, postIds, request, requestJson, similarTitle, validateArticles, verifyPosts,
 } from './core.mjs';
 
@@ -180,14 +180,20 @@ export async function main(args = process.argv.slice(2)) {
     for (const category of plan.categories) {
       try {
         const local = pools[category].filter((source) => !used.has(source.id));
+        if (!local.length && pools[category].length) report.warnings.push(`${category}: all ${pools[category].length} recent source(s) were already used by a post from the last 14 days; the feed has published nothing new since the last run`);
         // General news is a safety net for a category whose own feeds ran dry, not routine
         // filler. It used to be merged unconditionally and the list padded to 8, which is how
         // national stories (electoral rolls, SIR) ended up published under lifestyle.
-        const fallback = local.length >= plan.perCategory + 2 ? []
+        // Only a place category may draw on it: editorial-prompt.md tells the model that a
+        // national story with real bearing on up/uk/delhi is acceptable but that general news
+        // is NOT a substitute under a topic category. Topping lifestyle up with politics
+        // therefore spends a Gemini request to be refused, and the refusal arrives as a
+        // malformed article rather than a clean skip.
+        const fallback = local.length >= plan.perCategory + 2 || !PLACE_CATEGORIES.has(category) ? []
           : [...(pools.others ?? []), ...(pools.world ?? []), ...(pools.mystery ?? [])].filter((source) => !used.has(source.id));
         if (fallback.length) report.warnings.push(`${category}: only ${local.length} on-topic source(s); topped up from general news`);
         const sources = [...new Map([...local, ...fallback].map((source) => [source.id, source])).values()].slice(0, 8);
-        assert(sources.length >= plan.perCategory, `${category}: insufficient recent, readable sources`);
+        assert(sources.length >= plan.perCategory, `${category}: insufficient recent, readable sources (${local.length} on-topic${PLACE_CATEGORIES.has(category) ? `, ${fallback.length} general-news fallback` : '; topic categories take no general-news fallback'})`);
         console.log(`Generating and validating: ${category}`);
         let articles;
         let correctionRequest = null;
