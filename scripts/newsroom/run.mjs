@@ -178,7 +178,12 @@ export async function main(args = process.argv.slice(2)) {
     for (const category of plan.categories) {
       try {
         const local = pools[category].filter((source) => !used.has(source.id));
-        const fallback = [...(pools.others ?? []), ...(pools.world ?? []), ...(pools.mystery ?? [])].filter((source) => !used.has(source.id));
+        // General news is a safety net for a category whose own feeds ran dry, not routine
+        // filler. It used to be merged unconditionally and the list padded to 8, which is how
+        // national stories (electoral rolls, SIR) ended up published under lifestyle.
+        const fallback = local.length >= plan.perCategory + 2 ? []
+          : [...(pools.others ?? []), ...(pools.world ?? []), ...(pools.mystery ?? [])].filter((source) => !used.has(source.id));
+        if (fallback.length) report.warnings.push(`${category}: only ${local.length} on-topic source(s); topped up from general news`);
         const sources = [...new Map([...local, ...fallback].map((source) => [source.id, source])).values()].slice(0, 8);
         assert(sources.length >= plan.perCategory, `${category}: insufficient recent, readable sources`);
         console.log(`Generating and validating: ${category}`);
