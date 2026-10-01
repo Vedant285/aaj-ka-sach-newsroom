@@ -190,7 +190,7 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     }
     const body = article.blocks.map((block) => block.text).join('\n');
     const bodyCharacters = characterCount(body);
-    const totalCharacters = characterCount(`${body}\n${HEADLINE_CARD_NOTICE}`);
+    const totalCharacters = characterCount(`${body}\nचित्र: प्रतीकात्मक तस्वीर।`);
     if (bodyCharacters < 1500 || totalCharacters > 2900) {
       throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters}, includingImageNotice=${totalCharacters} Unicode characters). Body must contain at least 1500 characters; body including the image notice must not exceed 2900. Revise toward 2000-2400 body characters using only supplied source facts.`);
     }
@@ -207,6 +207,7 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     }
     return {
       title: article.title, slug: article.slug, district: article.district, tags: article.tags,
+      imageQueries: Array.isArray(article.imageQueries) ? [...new Set(article.imageQueries.filter((query) => typeof query === 'string' && /^[a-zA-Z][a-zA-Z -]{2,59}$/.test(query) && query.trim().split(/\s+/).length <= 3).map(normalize))].slice(0, 3) : [],
       blocks: article.blocks.map(({ type, text }) => ({ type, text })), category,
       sourceIds: article.sourceIds, evidence: article.evidence.filter((item) => article.sourceIds.includes(item.sourceId)).map(({ sourceId, quote }) => ({ sourceId, quote })),
       sources: article.sourceIds.map((sourceId) => {
@@ -242,6 +243,25 @@ export function eligibleImage(info) {
     && info.width >= 800;
 }
 
+export function photoMatches(page, info, query) {
+  const metadata = info.extmetadata ?? {};
+  const description = plainText(metadata.ImageDescription?.value);
+  const title = plainText(page.title).replace(/^File:/i, '').replace(/[_-]/g, ' ');
+  const context = `${title} ${description} ${plainText(metadata.Categories?.value)}`;
+  if (/watermark|ai[ -]generated|artificial intelligence|stable diffusion|midjourney|dall[ -]?e|computer[ -]generated|screenshot|\blogos?\b|\bdiagrams?\b|illustration|\bpaintings?\b|\bdrawings?\b|\bmaps?\b/i.test(context)) return false;
+  const words = (value) => value.toLowerCase().match(/[a-z]{3,}/g) ?? [];
+  const terms = [...new Set(words(query))];
+  const titleTerms = new Set(words(title));
+  return terms.length > 0 && terms.filter((term) => titleTerms.has(term)).length >= Math.ceil(terms.length * 2 / 3);
+}
+
+export function imageContentType(bytes) {
+  if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
+  if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
+  if (bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  throw new Error('Image has unsupported file signature');
+}
+
 export async function findImage(query, fallbackQueries = []) {
   assert(typeof query === 'string' && query.trim().length >= 3 && query.length <= 120, 'Invalid image query');
   assert(Array.isArray(fallbackQueries) && fallbackQueries.length <= 2 && fallbackQueries.every((value) => typeof value === 'string' && value.trim().length >= 3 && value.length <= 120), 'Invalid image fallback queries');
@@ -259,10 +279,10 @@ export async function findImage(query, fallbackQueries = []) {
     candidates += pages.length;
     for (const page of pages) {
       const info = page.imageinfo?.[0];
-      if (!info || !eligibleImage(info)) continue;
+      if (!info || !eligibleImage(info) || !photoMatches(page, info, searchQuery)) continue;
       const download = safeUrl(info.thumburl ?? info.url, IMAGE_DOMAINS).href;
       return {
-        title: page.title, download, pageUrl: safeUrl(info.descriptionurl, ['commons.wikimedia.org']).href,
+        kind: 'real-photo', title: page.title, download, pageUrl: safeUrl(info.descriptionurl, ['commons.wikimedia.org']).href,
         license: plainText(info.extmetadata.LicenseShortName.value),
         creator: plainText(info.extmetadata.Artist?.value),
         licenseUrl: plainText(info.extmetadata.LicenseUrl?.value),
@@ -274,7 +294,7 @@ export async function findImage(query, fallbackQueries = []) {
 }
 
 export function portableText(article) {
-  return [...article.blocks, { type: 'paragraph', text: article.image?.kind === 'headline-card' ? HEADLINE_CARD_NOTICE : 'चित्र: प्रतीकात्मक तस्वीर।' }].map((block, index) => ({
+  return [...article.blocks, ...(article.image ? [{ type: 'paragraph', text: article.image.kind === 'headline-card' ? HEADLINE_CARD_NOTICE : 'चित्र: प्रतीकात्मक तस्वीर।' }] : [])].map((block, index) => ({
     _type: 'block', _key: `block-${index}`, style: block.type === 'heading' ? 'h3' : 'normal', markDefs: [],
     ...(block.type === 'bullet' ? { listItem: 'bullet', level: 1 } : {}),
     children: [{ _type: 'span', _key: `span-${index}`, marks: [], text: block.text }],
@@ -287,7 +307,7 @@ export function makeDocument(article, index, day, now, assetId, plan = batchPlan
     _id: `${plan.prefix}-${day}-${article.category}-${slot}`, _type: 'post',
     title: article.title, slug: { _type: 'slug', current: `${article.slug}-${article.sourceIds[0].slice(0, 8)}` },
     category: article.category, district: article.district, tags: article.tags, body: portableText(article),
-    mainImage: { _type: 'image', asset: { _type: 'reference', _ref: assetId }, ...(article.image?.kind === 'headline-card' ? { alt: article.title, caption: article.image.caption } : {}) },
+    ...(article.image ? { mainImage: { _type: 'image', asset: { _type: 'reference', _ref: assetId }, alt: article.title, caption: article.image.caption } } : {}),
     editorialStatus: 'approved', webPriority: 60, isBreaking: false,
     publishedAt: new Date(now.getTime() - (plan.count - 1 - index) * 1000).toISOString(),
     newsroom: { day, batchSize: plan.count, sourceIds: article.sourceIds, sources: article.sources, evidence: article.evidence, image: article.image },
@@ -301,7 +321,8 @@ export function verifyPosts(posts, day, plan = batchPlan()) {
   for (const category of plan.categories) assert(posts.filter((post) => post.category === category).length === plan.perCategory, `Expected ${plan.perCategory} post(s) in ${category}`);
   for (const post of posts) {
     assert(expectedIds.has(post._id), 'Unexpected batch post ID');
-    assert(post.mainImage?.asset?._ref && post.editorialStatus === 'approved', 'Missing image or approval');
+    assert(post.editorialStatus === 'approved', 'Missing approval');
+    if (post.mainImage !== undefined) assert(post.mainImage?.asset?._ref, 'Malformed image reference');
     assert(!('author' in post) && !('reporter' in post), 'Unexpected byline');
     assert(post.webPriority === 60 && post.isBreaking === false, 'Unexpected homepage priority');
     assert(typeof post.title === 'string' && post.title && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(post.slug?.current ?? ''), 'Missing headline or invalid slug');
@@ -313,5 +334,6 @@ export function verifyPosts(posts, day, plan = batchPlan()) {
     lengths.push(length);
   }
   assert(new Set(posts.map((post) => post.slug.current)).size === plan.count, 'Duplicate published slug');
-  return { count: posts.length, withImages: posts.length, approved: posts.length, bylines: 0, perCategory: Object.fromEntries(plan.categories.map((category) => [category, plan.perCategory])), bodyLength: { min: Math.min(...lengths), max: Math.max(...lengths), average: Math.round(lengths.reduce((sum, length) => sum + length, 0) / lengths.length) } };
+  const withImages = posts.filter((post) => post.mainImage?.asset?._ref).length;
+  return { count: posts.length, withImages, withoutImages: posts.length - withImages, approved: posts.length, bylines: 0, perCategory: Object.fromEntries(plan.categories.map((category) => [category, plan.perCategory])), bodyLength: { min: Math.min(...lengths), max: Math.max(...lengths), average: Math.round(lengths.reduce((sum, length) => sum + length, 0) / lengths.length) } };
 }
