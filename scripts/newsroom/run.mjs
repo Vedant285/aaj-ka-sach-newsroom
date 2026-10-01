@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { load } from 'cheerio';
 import {
-  CATEGORIES, QuotaError, ArticleStructureError, assert, batchPlan, collectSources, dayInIndia, findImage, makeDocument,
+  CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, assert, batchPlan, collectSources, dayInIndia, findImage, makeDocument,
   normalize, postIds, request, requestJson, validateArticles, verifyPosts,
 } from './core.mjs';
 
@@ -185,8 +185,8 @@ export async function main(args = process.argv.slice(2)) {
             articles = validateArticles(payload, category, sources, used, plan.perCategory);
             break;
           } catch (error) {
-            if (!(error instanceof ArticleStructureError) || attempt === 1 || JSON.stringify(payload).length > 40000) throw error;
-            const warning = `${error.message} Requesting one structural correction; this consumes another Gemini request.`;
+            if (!(error instanceof ArticleStructureError || error instanceof ArticleLengthError) || attempt === 1 || JSON.stringify(payload).length > 40000) throw error;
+            const warning = `${error.message} Requesting one format/length correction; this consumes another Gemini request.`;
             report.warnings.push(warning);
             console.warn(warning);
             correctionRequest = { validationError: error.message, previousResponse: payload };
