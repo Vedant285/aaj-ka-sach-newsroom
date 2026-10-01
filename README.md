@@ -102,6 +102,14 @@ of exactly one billable/quota-counted request. It also fetches source articles a
 Commons image metadata. Dry-run consumes API quota but uploads no assets and creates
 no posts. If no suitable supported story or image exists, it fails rather than inventing one.
 
+Image selection checks up to 50 Commons candidates per query and tries up to two
+broader, topic-related fallback queries supplied in the original Gemini response.
+Fallback searches do not require extra Gemini calls. All searches retain the same
+CC0/public-domain, dimensions, file-type, and restriction checks. The selected
+query is recorded in image metadata; exhausted searches report their search and
+candidate counts. These are representative images: manually review relevance and
+licensing before publishing. If every search fails, publication still stops.
+
 If the response has malformed block objects or the wrong paragraph/subheading
 structure, the runner prints the offending block index and field requirement or
 the actual counts and allows **one structural correction request per category**. This
