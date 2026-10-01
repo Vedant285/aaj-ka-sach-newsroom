@@ -258,17 +258,43 @@ export function eligibleImage(info) {
 }
 
 export function photoMatches(page, info, query) {
+  return photoScore(page, info, query) > 0;
+}
+
+// Crude suffix stripping, not linguistics: it only has to be consistent between the
+// query and the file metadata. Without it "kneaded" misses a title reading "Kneading",
+// and a photo of the actual subject loses to one that merely shares a literal token.
+const stem = (word) => {
+  const base = word.replace(/(?:ings?|edly|ed|ers?|es|s)$/, '').replace(/(.)\1$/, '$1');
+  return base.length >= 3 ? base : word;
+};
+
+// 0 means unusable. Above that, higher is a better subject match: a query term in the
+// file title is much stronger evidence than one that only shows up in the description,
+// so "Kneading Chapati Dough.jpg" outranks "Hand-held dough hook.jpg" for "kneaded dough".
+// A full title match scores 3; matching half the terms via description alone scores ~0.5.
+export function photoScore(page, info, query) {
   const metadata = info.extmetadata ?? {};
   const description = plainText(metadata.ImageDescription?.value);
+  const categories = plainText(metadata.Categories?.value);
   const title = plainText(page.title).replace(/^File:/i, '').replace(/[_-]/g, ' ');
-  const context = `${title} ${description} ${plainText(metadata.Categories?.value)}`;
-  if (/watermark|ai[ -]generated|artificial intelligence|stable diffusion|midjourney|dall[ -]?e|computer[ -]generated|screenshot|\blogos?\b|\bdiagrams?\b|illustration|\bpaintings?\b|\bdrawings?\b|\bmaps?\b/i.test(context)) return false;
-  const words = (value) => value.toLowerCase().match(/[a-z]{3,}/g) ?? [];
+  const context = `${title} ${description} ${categories}`;
+  if (/watermark|ai[ -]generated|artificial intelligence|stable diffusion|midjourney|dall[ -]?e|computer[ -]generated|screenshot|\blogos?\b|\bdiagrams?\b|illustration|\bpaintings?\b|\bdrawings?\b|\bmaps?\b|engraving|woodcut|lithograph|etching|\bsketch(?:es)?\b|pd-old/i.test(context)) return 0;
+  // Historical prints and scanned book plates are public domain and score well on text,
+  // but a 1909 engraving is not a representative photo of a present-day subject.
+  const year = Number(plainText(metadata.DateTimeOriginal?.value).match(/\b([12][0-9]{3})\b/)?.[1]);
+  if (year && year < 1990) return 0;
+  const words = (value) => (value.toLowerCase().match(/[a-z]{3,}/g) ?? []).map(stem);
   const terms = [...new Set(words(query))];
+  if (!terms.length) return 0;
+  const titleTerms = new Set(words(title));
+  const otherTerms = new Set([...words(description), ...words(categories)]);
+  const inTitle = terms.filter((term) => titleTerms.has(term));
+  const inOther = terms.filter((term) => !titleTerms.has(term) && otherTerms.has(term));
   // The file title alone is often terse, so the description counts as subject
-  // evidence too, and half the query terms is enough to call it a match.
-  const subjectTerms = new Set([...words(title), ...words(description)]);
-  return terms.length > 0 && terms.filter((term) => subjectTerms.has(term)).length >= Math.max(1, Math.ceil(terms.length / 2));
+  // evidence too, and half the query terms is enough to qualify at all.
+  if (inTitle.length + inOther.length < Math.max(1, Math.ceil(terms.length / 2))) return 0;
+  return (3 * inTitle.length + inOther.length) / terms.length;
 }
 
 export function imageContentType(bytes) {
@@ -298,6 +324,7 @@ export async function findImage(query, fallbackQueries = []) {
   assert(Array.isArray(fallbackQueries) && fallbackQueries.length <= 2 && fallbackQueries.every((value) => typeof value === 'string' && value.trim().length >= 3 && value.length <= 120), 'Invalid image fallback queries');
   const queries = [...new Set([query, ...fallbackQueries].map(normalize))];
   let candidates = 0;
+  let weak = null;
   for (const searchQuery of queries) {
     const url = new URL('https://commons.wikimedia.org/w/api.php');
     url.search = new URLSearchParams({
@@ -308,24 +335,38 @@ export async function findImage(query, fallbackQueries = []) {
     assert(!result.error, 'Commons search: API error; image search did not complete');
     const pages = Object.values(result.query?.pages ?? {}).sort((first, second) => first.index - second.index);
     candidates += pages.length;
+    let best = null;
     for (const page of pages) {
       const info = page.imageinfo?.[0];
       if (!info) continue;
       const grant = eligibleImage(info);
-      if (!grant || !photoMatches(page, info, searchQuery)) continue;
-      const license = plainText(info.extmetadata?.LicenseShortName?.value);
-      const creator = plainText(info.extmetadata?.Artist?.value);
-      const attribution = grant.attribution ? imageCredit(creator, license) : '';
-      const download = safeUrl(info.thumburl ?? info.url, IMAGE_DOMAINS).href;
-      return {
-        kind: 'real-photo', title: page.title, download, pageUrl: safeUrl(info.descriptionurl, ['commons.wikimedia.org']).href,
-        license, creator, attribution,
-        licenseUrl: plainText(info.extmetadata?.LicenseUrl?.value),
-        caption: attribution ? `प्रतीकात्मक तस्वीर — ${attribution}` : 'प्रतीकात्मक तस्वीर',
-        searchQuery,
-      };
+      if (!grant) continue;
+      const score = photoScore(page, info, searchQuery);
+      // Commons orders by its own text relevance, which happily puts an obscure tool
+      // above the actual subject. Rank the whole page and keep the best, rather than
+      // taking the first thing that clears the bar.
+      if (score > 0 && (!best || score > best.score)) best = { page, info, grant, score };
+      if (best?.score >= 3) break;
     }
+    if (!best) continue;
+    const { page, info, grant } = best;
+    const license = plainText(info.extmetadata?.LicenseShortName?.value);
+    const creator = plainText(info.extmetadata?.Artist?.value);
+    const attribution = grant.attribution ? imageCredit(creator, license) : '';
+    const download = safeUrl(info.thumburl ?? info.url, IMAGE_DOMAINS).href;
+    const match = {
+      kind: 'real-photo', title: page.title, download, pageUrl: safeUrl(info.descriptionurl, ['commons.wikimedia.org']).href,
+      license, creator, attribution,
+      licenseUrl: plainText(info.extmetadata?.LicenseUrl?.value),
+      caption: attribution ? `प्रतीकात्मक तस्वीर — ${attribution}` : 'प्रतीकात्मक तस्वीर',
+      searchQuery, matchScore: Number(best.score.toFixed(2)),
+    };
+    // A weak best is worth one look at the next query, which is usually broader and
+    // may hold a squarely on-subject photo. Fall back to the weak one if it does not.
+    if (best.score >= 1.5 || searchQuery === queries[queries.length - 1]) return match;
+    weak ??= match;
   }
+  if (weak) return weak;
   throw new Error(`No reusable CC0/public-domain/CC BY/CC BY-SA image after ${queries.length} search(es), ${candidates} candidate(s); review or broaden the image queries`);
 }
 
