@@ -10,9 +10,6 @@ export const CATEGORIES = ['up', 'uk', 'delhi', 'world', 'dharma', 'business', '
 export const PLACE_CATEGORIES = new Set(['up', 'uk', 'delhi']);
 const SOURCE_DOMAINS = ['amarujala.com', 'bhaskar.com', 'abplive.com', 'bbc.co.uk', 'bbci.co.uk', 'bbc.com', 'sciencedaily.com', 'nasa.gov'];
 export const IMAGE_DOMAINS = ['upload.wikimedia.org', 'thumb.wikimedia.org'];
-// Characters reserved in the body budget for the image notice. Only credit-free
-// licences are accepted, so the notice is a fixed illustrative-photo disclosure.
-export const IMAGE_NOTICE_BUDGET = 30;
 export const hash = (text) => createHash('sha256').update(text).digest('hex').slice(0, 24);
 export const dayInIndia = (date = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 export function batchPlan(count = 20, category = 'up') {
@@ -317,8 +314,7 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     }
     const body = article.blocks.map((block) => block.text).join('\n');
     const bodyCharacters = characterCount(body);
-    const totalCharacters = bodyCharacters + 1 + IMAGE_NOTICE_BUDGET;
-    if (bodyCharacters < 1500 || totalCharacters > 2900) {
+    if (bodyCharacters < 1500 || bodyCharacters > 2900) {
       // Give the model arithmetic, not a target range. Two runs were lost to bodies of
       // 1283 and 1403 characters: "revise toward 2100-2500" never told a weak model how
       // far short it was, nor that its paragraphs were running at half the asked length.
@@ -326,8 +322,8 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
       const perParagraph = Math.round(characterCount(prose.map((block) => block.text).join('')) / Math.max(1, paragraphs));
       const remedy = bodyCharacters < 1500
         ? `It is ${1500 - bodyCharacters} characters below the floor and ${2100 - bodyCharacters} below target. Your ${paragraphs} paragraphs average ${perParagraph} characters each and must be 410-470 each. Expand EVERY paragraph using detail already present in the supplied sources; do not add paragraphs, repeat sentences, or invent facts.`
-        : `It is ${totalCharacters - 2900} characters over. Cut repetition and secondary detail from the longest paragraphs and keep all ${paragraphs} of them.`;
-      throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters}, includingImageNotice=${totalCharacters} Unicode characters). The body, headings included, must be 1500-${2900 - 1 - IMAGE_NOTICE_BUDGET} characters. ${remedy} Leave every evidence quote exactly as it is.`);
+        : `It is ${bodyCharacters - 2900} characters over. Cut repetition and secondary detail from the longest paragraphs and keep all ${paragraphs} of them.`;
+      throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters} Unicode characters). The body, headings included, must be 1500-2900 characters. ${remedy} Leave every evidence quote exactly as it is.`);
     }
     const visible = [article.title, article.district, ...article.tags, body].join(' ');
     assert(!/[a-z]/i.test(visible) && /[\u0900-\u097f]/.test(visible), `${category}: article must use Devanagari, not Latin text`);
@@ -451,14 +447,10 @@ export function imageContentType(bytes) {
   throw new Error('Image has unsupported file signature');
 }
 
-// Not a credit — CC0 and public-domain photos need none. This is the disclosure that
-// the photo illustrates the subject rather than showing the reported event itself.
-export const IMAGE_NOTICE = 'चित्र: प्रतीकात्मक तस्वीर।';
+// Provenance only. CC0 and public-domain photos need no credit, the published body
+// carries no image line, and the site never queries this — it lives in newsroom.image
+// so an audit can tell a keyword-matched stock photo from a photo of the event.
 export const IMAGE_CAPTION = 'प्रतीकात्मक तस्वीर';
-
-export function imageNotice() {
-  return IMAGE_NOTICE;
-}
 
 export async function findImage(query, fallbackQueries = []) {
   assert(typeof query === 'string' && query.trim().length >= 3 && query.length <= 120, 'Invalid image query');
@@ -511,7 +503,7 @@ export async function findImage(query, fallbackQueries = []) {
 }
 
 export function portableText(article) {
-  return [...article.blocks, ...(article.image ? [{ type: 'paragraph', text: imageNotice(article.image) }] : [])].map((block, index) => ({
+  return article.blocks.map((block, index) => ({
     _type: 'block', _key: `block-${index}`, style: block.type === 'heading' ? 'h3' : 'normal', markDefs: [],
     ...(block.type === 'bullet' ? { listItem: 'bullet', level: 1 } : {}),
     children: [{ _type: 'span', _key: `span-${index}`, marks: [], text: block.text }],

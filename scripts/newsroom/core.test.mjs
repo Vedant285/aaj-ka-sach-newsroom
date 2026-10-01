@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  ArticleEvidenceError, ArticleLengthError, CATEGORIES, batchPlan, characterCount, creditFreeLicense, eligibleImage, IMAGE_NOTICE_BUDGET,
-  imageNotice, interleaveByRank, makeDocument, parseIndex, photoScore, portableText, similarTitle, validateArticles, verifyPosts,
+  ArticleEvidenceError, ArticleLengthError, CATEGORIES, batchPlan, characterCount, creditFreeLicense, eligibleImage,
+  interleaveByRank, makeDocument, parseIndex, photoScore, portableText, similarTitle, validateArticles, verifyPosts,
 } from './core.mjs';
 
 // Offline only: no network, no credentials. Run with `npm test`.
@@ -25,15 +25,9 @@ test('only credit-free licences are accepted', () => {
   assert.ok(!eligibleImage({ ...image('https://creativecommons.org/publicdomain/zero/1.0/'), width: 640 }));
 });
 
-test('the image notice fits the reserved body budget', () => {
-  assert.ok(characterCount(imageNotice()) <= IMAGE_NOTICE_BUDGET);
-  // editorial-prompt.md promises authors 2,869 characters; the runner caps body+notice at 2,900.
-  assert.equal(2869 + 1 + IMAGE_NOTICE_BUDGET, 2900);
-});
-
 test('editorial prompt advertises the same ceiling the validator enforces', async () => {
   const prompt = await readFile(new URL('./editorial-prompt.md', import.meta.url), 'utf8');
-  assert.match(prompt, /1,500-2,869 Unicode characters/);
+  assert.match(prompt, /1,500-2,900 Unicode characters/);
 });
 
 test('photoScore rejects artwork, artefacts and pre-1990 prints', () => {
@@ -101,13 +95,19 @@ test('a full batch still verifies, and a batch below the minimum is rejected', (
   assert.throws(() => verifyPosts(buildBatch().slice(0, 11), '2026-10-01', plan), /12-20 distinct batch post/);
 });
 
-test('published documents carry no caption and no outbound links', () => {
+test('published documents carry no caption, no image line and no outbound links', () => {
   const plan = batchPlan(20);
   const withImage = makeDocument({ ...article('up'), image: { kind: 'real-photo', license: 'CC0' } }, 0, '2026-10-01', new Date(), 'asset-1', plan, 1);
   assert.ok(!('caption' in withImage.mainImage));
   assert.equal(withImage.mainImage.alt, withImage.title);
-  const blocks = portableText({ ...article('up'), image: { kind: 'real-photo' } });
-  assert.equal(blocks.at(-1).children[0].text, imageNotice());
+  // The body is exactly the model's blocks. Nothing is appended, so an article with a
+  // photo and one without publish the same text and the length the model was asked for
+  // is the length that reaches the page.
+  const source = article('up');
+  const blocks = portableText({ ...source, image: { kind: 'real-photo' } });
+  assert.equal(blocks.length, source.blocks.length);
+  assert.deepEqual(blocks.map((block) => block.children[0].text), source.blocks.map((block) => block.text));
+  assert.deepEqual(blocks, portableText({ ...source, image: null }));
   assert.ok(blocks.every((block) => block.markDefs.length === 0));
 });
 
@@ -220,14 +220,14 @@ test('a short body is told how short it is, not just that it is short', () => {
   assert.ok(caught.message.includes(`${1500 - body} characters below the floor`));
   assert.match(caught.message, /Your 4 paragraphs average 270 characters each and must be 410-470 each/);
   // The ceiling quoted to the author must be the one editorial-prompt.md advertises.
-  assert.match(caught.message, /must be 1500-2869 characters/);
+  assert.match(caught.message, /must be 1500-2900 characters/);
 });
 
 test('an over-long body is told how much to cut', () => {
   let caught;
   try { validatePayload(withParagraphs('क'.repeat(800))); } catch (error) { caught = error; }
   assert.ok(caught instanceof ArticleLengthError, `expected ArticleLengthError, got ${caught}`);
-  const total = Number(caught.message.match(/includingImageNotice=(\d+)/)[1]);
-  assert.ok(caught.message.includes(`It is ${total - 2900} characters over`));
+  const body = Number(caught.message.match(/body=(\d+)/)[1]);
+  assert.ok(caught.message.includes(`It is ${body - 2900} characters over`));
   assert.match(caught.message, /keep all 4 of them/);
 });

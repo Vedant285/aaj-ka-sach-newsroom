@@ -24,7 +24,7 @@ counts as the same event; the runner rejects it and that article slot is lost.
 If the requested number of well-supported suitable stories is unavailable, return fewer articles and
 explain the shortage in skipped. Never manufacture a story to satisfy the quota.
 
-Each article must have 1,500-2,869 Unicode characters of body text (headings included),
+Each article must have 1,500-2,900 Unicode characters of body text (headings included),
 4-8 normal paragraphs (the first a dateline lead), 1-2 subheads, optional bullet items.
 For reliability, use exactly 5 paragraph blocks and 2 heading blocks, in this order:
 paragraph, heading, paragraph, paragraph, heading, paragraph, paragraph.
@@ -40,7 +40,6 @@ No byline or news outlet/agency name in article text; no PTI, ANI, एजें�
 Preserve source URLs only in the sourceIds
 references supplied separately. Source attribution is stored in internal metadata.
 Write original text, not translations copied sentence-for-sentence from a publisher.
-The runner reserves the remaining characters up to 2,900 for a short image notice.
 
 Return only a JSON object of this exact shape (no Markdown fences):
 
@@ -72,7 +71,8 @@ physical subject supported by this article, for example "potatoes" or "food proc
 Avoid scene descriptions, unrelated scenery, named people, logos and speculative
 depictions of future buildings. Queries find representative real photos, not proof
 of the event. If no subject is suitable, return an empty imageQueries array.
-Do not return photo URLs, image-generation prompts or an image notice. The runner
+Do not return photo URLs or image-generation prompts, and do not write a caption,
+photo credit, or any line describing the image. The runner
 uses a credit-free (CC0 or public domain) relevant real photo if available, otherwise
 no image at all.
 Every block must be an object with exactly this shape: {"type":"paragraph","text":"..."}.
@@ -107,4 +107,5 @@ not words or bytes. If too short, add only relevant details actually present in 
 supplied sources; never repeat text or add unsupported background to reach a count.
 If too long, remove repetition and secondary details without changing supported
 facts. Recheck BOTH block structure and length: there is only one correction attempt
-in total, not one per error type. Do not include the image notice yourself.
+in total, not one per error type. Nothing is appended to your blocks, so the
+characters you return are exactly the characters published.
