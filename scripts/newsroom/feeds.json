@@ -1,12 +1,12 @@
 {
-  "up": ["https://www.amarujala.com/rss/uttar-pradesh.xml", "https://www.jagran.com/rss/news/state-uttar-pradesh.xml"],
-  "uk": ["https://www.amarujala.com/rss/uttarakhand.xml", "https://www.jagran.com/rss/news/state-uttarakhand.xml"],
-  "delhi": ["https://www.amarujala.com/rss/delhi.xml", "https://www.jagran.com/rss/news/state-delhi.xml"],
-  "world": ["https://www.amarujala.com/rss/world.xml", "https://feeds.bbci.co.uk/news/world/rss.xml"],
-  "dharma": ["https://www.amarujala.com/rss/spirituality.xml", "https://www.jagran.com/rss/spiritual/religion.xml"],
-  "business": ["https://www.amarujala.com/rss/business.xml", "https://www.jagran.com/rss/business/business-news.xml"],
-  "sports": ["https://www.amarujala.com/rss/sports.xml", "https://feeds.bbci.co.uk/sport/rss.xml"],
-  "others": ["https://www.amarujala.com/rss/technology.xml", "https://www.jagran.com/rss/news/national.xml"],
+  "up": ["https://www.bhaskar.com/rss-v1--category-2052.xml", "https://www.amarujala.com/rss/uttar-pradesh.xml"],
+  "uk": ["https://feeds.bbci.co.uk/hindi/rss.xml", "https://www.amarujala.com/rss/uttarakhand.xml"],
+  "delhi": ["https://www.bhaskar.com/rss-v1--category-1061.xml", "https://www.amarujala.com/rss/delhi.xml"],
+  "world": ["https://www.bhaskar.com/rss-v1--category-1125.xml", "https://feeds.bbci.co.uk/news/world/rss.xml"],
+  "dharma": ["https://feeds.bbci.co.uk/hindi/rss.xml", "https://www.amarujala.com/rss/spirituality.xml"],
+  "business": ["https://www.bhaskar.com/rss-v1--category-1051.xml", "https://www.abplive.com/business/feed"],
+  "sports": ["https://www.bhaskar.com/rss-v1--category-1053.xml", "https://feeds.bbci.co.uk/sport/rss.xml"],
+  "others": ["https://www.bhaskar.com/rss-v1--category-1061.xml", "https://www.abplive.com/news/feed"],
   "mystery": ["https://www.sciencedaily.com/rss/fossils_ruins.xml", "https://www.nasa.gov/feed/"],
-  "lifestyle": ["https://www.amarujala.com/rss/lifestyle.xml", "https://www.jagran.com/rss/lifestyle/lifestyle-news.xml"]
+  "lifestyle": ["https://www.bhaskar.com/rss-v1--category-1057.xml", "https://www.abplive.com/lifestyle/feed"]
 }
