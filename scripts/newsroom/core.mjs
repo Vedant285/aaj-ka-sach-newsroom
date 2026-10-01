@@ -165,8 +165,21 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     slugs.add(article.slug);
     assert(typeof article.district === 'string', `${category}: invalid district`);
     assert(Array.isArray(article.tags) && article.tags.length >= 3 && article.tags.length <= 6 && article.tags.every((tag) => typeof tag === 'string' && tag.trim()), `${category}: need 3-6 tags`);
-    assert(Array.isArray(article.blocks) && article.blocks.length <= 20, `${category}: invalid blocks`);
-    assert(article.blocks.every((block) => ['paragraph', 'heading', 'bullet'].includes(block.type) && typeof block.text === 'string' && block.text.trim()), `${category}: invalid block`);
+    if (!Array.isArray(article.blocks) || article.blocks.length > 20) {
+      throw new ArticleStructureError(`${category}: invalid blocks; expected an array of at most 20 block objects`);
+    }
+    for (const [index, block] of article.blocks.entries()) {
+      const prefix = `${category}: invalid block at blocks[${index}]`;
+      if (!block || typeof block !== 'object' || Array.isArray(block)) {
+        throw new ArticleStructureError(`${prefix}; expected an object with type and text fields`);
+      }
+      if (!['paragraph', 'heading', 'bullet'].includes(block.type)) {
+        throw new ArticleStructureError(`${prefix}; type is missing or unsupported; use exactly paragraph, heading, or bullet`);
+      }
+      if (typeof block.text !== 'string' || !block.text.trim()) {
+        throw new ArticleStructureError(`${prefix}; text must be a non-empty string, not an array or nested object`);
+      }
+    }
     const paragraphs = article.blocks.filter((block) => block.type === 'paragraph').length;
     const headings = article.blocks.filter((block) => block.type === 'heading').length;
     if (!(paragraphs >= 4 && paragraphs <= 8 && headings >= 1 && headings <= 2 && article.blocks[0]?.type === 'paragraph')) {
