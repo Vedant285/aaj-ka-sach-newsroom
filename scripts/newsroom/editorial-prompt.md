@@ -42,7 +42,8 @@ Return only a JSON object of this exact shape (no Markdown fences):
     "tags": ["पहला उपयुक्त हिंदी टैग", "दूसरा उपयुक्त हिंदी टैग", "तीसरा उपयुक्त हिंदी टैग"],
     "sourceIds": ["one or more IDs from the supplied source records"],
     "evidence": [{"sourceId": "a referenced source ID", "quote": "a short exact substring copied from that source text, 30-180 characters"}],
-    "imageQuery": "short English Commons search for a relevant place, object, monument or landscape; avoid people and logos",
+    "imageQuery": "short English Commons search for the main subject or place",
+    "imageFallbackQueries": ["broader English search for the same subject", "simple English search for a relevant representative object"],
     "blocks": [
       {"type": "paragraph", "text": "स्थान: मुख्य समाचार का पूरा पहला अनुच्छेद यहाँ लिखें।"},
       {"type": "heading", "text": "पहला उपशीर्षक"},
@@ -57,6 +58,14 @@ Return only a JSON object of this exact shape (no Markdown fences):
 }
 
 blocks must contain the whole article, using only paragraph, heading, or bullet types.
+Provide two short, distinct imageFallbackQueries based on the article's supported
+subject. Use 1-3 English search terms per query, not sentences. Prefer objects and
+infrastructure over people, logos, or unrelated scenery. Broaden the topic rather
+than adding more location words. For example, an oil refinery project can use
+"oil refinery" or "petroleum storage tanks" as representative-image searches when
+a site-specific search fails. Do not copy those examples for unrelated stories.
+These are search terms, not claims about available photos or their licences. A
+representative image need not depict the actual event; never imply that it does.
 Every block must be an object with exactly this shape: {"type":"paragraph","text":"..."}.
 Use the literal English keys type and text, and the literal lowercase English type
 values paragraph, heading, or bullet. Only the text value is Hindi. Do not use
