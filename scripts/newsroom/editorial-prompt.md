@@ -57,6 +57,11 @@ Return only a JSON object of this exact shape (no Markdown fences):
 }
 
 blocks must contain the whole article, using only paragraph, heading, or bullet types.
+Every block must be an object with exactly this shape: {"type":"paragraph","text":"..."}.
+Use the literal English keys type and text, and the literal lowercase English type
+values paragraph, heading, or bullet. Only the text value is Hindi. Do not use
+translated keys/types, markdown, h2, subheading, content, children, or Sanity Portable
+Text objects. Never emit null blocks or empty text; text must be a plain string.
 The text values above describe the template, not publishable content. Replace every
 placeholder with complete source-grounded text. Before returning JSON, count the
 paragraph and heading OBJECTS and check the combined body character length.
