@@ -5,7 +5,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { load } from 'cheerio';
 import {
   CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, assert, batchPlan, collectSources, dayInIndia, findImage, makeDocument,
-  normalize, postIds, request, requestJson, validateArticles, verifyPosts,
+  IMAGE_DOMAINS, normalize, postIds, request, requestJson, validateArticles, verifyPosts,
 } from './core.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -42,7 +42,7 @@ export function sanityClient(config) {
     },
     async upload(image) {
       assert(config.token, 'Publishing requires SANITY_API_TOKEN');
-      const downloaded = await request(image.download, { domains: ['upload.wikimedia.org'], label: 'Image download', maxBytes: 12_000_000 });
+      const downloaded = await request(image.download, { domains: IMAGE_DOMAINS, label: 'Image download', maxBytes: 12_000_000 });
       const type = downloaded.type.split(';')[0];
       assert(['image/jpeg', 'image/png', 'image/webp'].includes(type), 'Downloaded image has unsupported content type');
       const result = await requestJson(`${base}/assets/images/${config.dataset}`, {
