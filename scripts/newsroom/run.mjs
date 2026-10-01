@@ -4,10 +4,9 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
-import { renderHeadlineCard } from './headline-card.mjs';
 import {
   CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, assert, batchPlan, collectSources, dayInIndia, makeDocument,
-  IMAGE_DOMAINS, normalize, postIds, request, requestJson, validateArticles, verifyPosts,
+  IMAGE_DOMAINS, findImage, imageContentType, normalize, postIds, request, requestJson, validateArticles, verifyPosts,
 } from './core.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -42,22 +41,14 @@ export function sanityClient(config) {
       assert(!result.error && result.result !== undefined, 'Sanity query failed');
       return result.result;
     },
-    async upload(image, generatedBytes) {
+    async upload(image, preparedBytes) {
       assert(config.token, 'Publishing requires SANITY_API_TOKEN');
-      let downloaded;
-      if (image.kind === 'headline-card') {
-        assert(Buffer.isBuffer(generatedBytes) && generatedBytes.length > 8 && generatedBytes.length <= 12_000_000, 'Missing or oversized generated image');
-        assert(generatedBytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), 'Generated image is not PNG');
-        assert(createHash('sha256').update(generatedBytes).digest('hex') === image.sha256, 'Generated image integrity check failed');
-        downloaded = { bytes: generatedBytes, type: 'image/png' };
-      } else {
-        downloaded = await request(image.download, { domains: IMAGE_DOMAINS, label: 'Image download', maxBytes: 12_000_000 });
-      }
-      const type = downloaded.type.split(';')[0];
-      assert(['image/jpeg', 'image/png', 'image/webp'].includes(type), 'Downloaded image has unsupported content type');
+      assert(image?.kind === 'real-photo' && Buffer.isBuffer(preparedBytes) && preparedBytes.length > 8 && preparedBytes.length <= 12_000_000, 'Missing or oversized prepared photo');
+      assert(createHash('sha256').update(preparedBytes).digest('hex') === image.sha256, 'Photo integrity check failed');
+      const type = imageContentType(preparedBytes);
       const result = await requestJson(`${base}/assets/images/${config.dataset}`, {
         domains: [host], label: 'Sanity asset upload', method: 'POST', retries: 0,
-        headers: { ...headers, 'Content-Type': type }, body: downloaded.bytes,
+        headers: { ...headers, 'Content-Type': type }, body: preparedBytes,
       });
       assert(result.document?._id, 'Asset upload did not return an ID; inspect Sanity before retrying');
       return result.document._id;
@@ -122,7 +113,10 @@ function reportMarkdown(report) {
     const image = article.image ?? article.newsroom?.image;
     if (image?.kind === 'headline-card' && /^headline-card-[a-z]+-\d+\.png$/.test(image.fileName)) {
       lines.push(`  - Headline card: ${image.fileName}; original graphic, not an event photograph.`, '', `![Headline card](./${image.fileName})`, '');
-    } else if (image) lines.push(`  - Image: ${safe(image.pageUrl)}; ${safe(image.license)}; creator: ${safe(image.creator)}`);
+    } else if (image) {
+      lines.push(`  - Image: ${safe(image.pageUrl)}; ${safe(image.license)}; creator: ${safe(image.creator)}`);
+      if (/^photo-[a-z]+-\d+\.(png|jpg|webp)$/.test(image.fileName ?? '')) lines.push('', `![Representative photo](./${image.fileName})`, '');
+    } else lines.push('  - No image: article is ready for text-only publication.');
   }
   lines.push('', '## Warnings / failures', ...report.warnings.map((warning) => `- ${safe(warning)}`));
   if (report.error) lines.push(`- ${safe(report.error)}`);
@@ -152,7 +146,7 @@ export async function main(args = process.argv.slice(2)) {
   await mkdir(output, { recursive: true });
   const report = { day, mode, requestedCount: plan.count, categories: plan.categories, status: 'started', articles: [], warnings: [], verification: {} };
   const client = sanityClient(config);
-  const generatedImages = new Map();
+  const preparedImages = new Map();
   const ids = postIds(day, plan);
   const getBatch = () => client.query('*[_id in $ids]', { ids });
   const writeReport = async () => {
@@ -213,11 +207,23 @@ export async function main(args = process.argv.slice(2)) {
           article.sourceIds.forEach((sourceId) => used.add(sourceId));
           alreadyUsed.push(article.title);
           report.articles.push(article);
-          const fileName = `headline-card-${article.category}-${report.articles.length}.png`;
-          const card = await renderHeadlineCard(article, day, fileName);
-          await writeFile(resolve(output, fileName), card.bytes);
-          generatedImages.set(fileName, card.bytes);
-          article.image = card.image;
+          article.image = null;
+          try {
+            assert(article.imageQueries.length, 'No usable photo search terms');
+            const image = await findImage(article.imageQueries[0], article.imageQueries.slice(1));
+            const downloaded = await request(image.download, { domains: IMAGE_DOMAINS, label: 'Photo download', maxBytes: 12_000_000, retries: 0 });
+            const type = imageContentType(downloaded.bytes);
+            assert(downloaded.type.split(';')[0] === type, 'Photo content type does not match its bytes');
+            const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[type];
+            const fileName = `photo-${article.category}-${report.articles.length}.${extension}`;
+            await writeFile(resolve(output, fileName), downloaded.bytes);
+            preparedImages.set(fileName, downloaded.bytes);
+            article.image = { ...image, fileName, sha256: createHash('sha256').update(downloaded.bytes).digest('hex') };
+          } catch (error) {
+            const warning = `${category}: no image; continuing text-only. ${error.message}`;
+            report.warnings.push(warning);
+            console.warn(warning);
+          }
         }
       } catch (error) {
         const warning = error.message.startsWith(`${category}:`) ? error.message : `${category}: ${error.message}`;
@@ -227,7 +233,7 @@ export async function main(args = process.argv.slice(2)) {
       }
       await writeReport();
     }
-    assert(report.articles.length === plan.count && report.articles.every((article) => article.image), `Batch incomplete: need ${plan.count} validated article(s) with images. No posts published. See report.`);
+    assert(report.articles.length === plan.count, `Batch incomplete: need ${plan.count} validated article(s). No posts published. See report.`);
     const documents = report.articles.map((article, index) => makeDocument(article, index, day, now, 'dry-run-placeholder', plan));
     report.verification = verifyPosts(documents, day, plan);
     await writeFile(resolve(output, 'documents.json'), JSON.stringify(documents, null, 2));
@@ -242,7 +248,8 @@ export async function main(args = process.argv.slice(2)) {
     assert(slugConflicts.length === 0, 'An article slug already exists; inspect the conflict before publishing');
     for (let index = 0; index < documents.length; index++) {
       const image = report.articles[index].image;
-      documents[index].mainImage.asset._ref = await client.upload(image, generatedImages.get(image.fileName));
+      if (!image) continue;
+      documents[index].mainImage.asset._ref = await client.upload(image, preparedImages.get(image.fileName));
       await writeFile(resolve(output, 'documents.json'), JSON.stringify(documents, null, 2));
     }
     assert(dayInIndia() === day, 'IST date changed during uploads; refusing publication');
