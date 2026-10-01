@@ -53,6 +53,9 @@ export class QuotaError extends Error {}
 export class ArticleStructureError extends Error {}
 export class ArticleLengthError extends Error {}
 export class ArticleEvidenceError extends Error {}
+// A response that never arrived in usable form. Distinct from the article errors above:
+// there is nothing to correct, so the runner re-asks the same question instead.
+export class GeminiResponseError extends Error {}
 
 export async function request(url, { domains, label, retries = 2, maxBytes = 3_000_000, ...options }) {
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -143,6 +146,40 @@ export function extractArticle(html) {
   return Array.from(text).slice(0, 7000).join('');
 }
 
+// A publisher with a section but no feed. Bhaskar covers Uttarakhand daily yet publishes
+// RSS for thirteen other states and not that one, and no reachable publisher has an
+// Uttarakhand feed either, so the section index is the only way to source the state.
+// Index entries carry no date or headline; both are read from the article page itself.
+export function parseIndex(html, pageUrl, pattern) {
+  const page = load(html);
+  const matches = new RegExp(pattern);
+  const urls = page('a[href]').map((index, element) => page(element).attr('href')).get().flatMap((href) => {
+    try {
+      const url = new URL(href, pageUrl);
+      // One story is linked several times per index page, sometimes as ?type=video. The
+      // query picks a player, not a different story, so it must not become a second id.
+      url.search = '';
+      url.hash = '';
+      // Match on the resolved path, so the pattern reads as a path and an absolute link
+      // to another site cannot satisfy it — canonicalSource throws on a foreign host.
+      return matches.test(url.pathname) ? [canonicalSource(url.href)] : [];
+    } catch { return []; }
+  });
+  return [...new Set(urls)].map((url) => ({ id: hash(url), url, title: '', publishedAt: null }));
+}
+
+// Prefer the page's own metadata over index link text, which is often a teaser rather
+// than the headline and never carries a date.
+export function articleMeta(html) {
+  const page = load(html);
+  const meta = (...selectors) => selectors.map((selector) => page(selector).attr('content')).find(Boolean);
+  const published = new Date(meta('meta[property="Last-Modified-Time"]', 'meta[property="article:published_time"]', 'meta[name="publish-date"]') ?? NaN);
+  return {
+    publishedAt: Number.isFinite(published.getTime()) ? published : null,
+    title: plainText(meta('meta[property="og:title"]', 'meta[name="title"]') ?? page('title').first().text()),
+  };
+}
+
 // Take one item from each feed in turn rather than the globally newest. Feed order within a
 // rank is the order in feeds.json, so the preferred feed leads.
 export function interleaveByRank(perFeed, limit) {
@@ -155,19 +192,28 @@ export function interleaveByRank(perFeed, limit) {
   return ordered;
 }
 
-export async function collectSources(feedUrls, now, warnings, excluded = new Set()) {
+export async function collectSources(feeds, now, warnings, excluded = new Set()) {
   const perFeed = [];
   const seen = new Set(excluded);
-  for (const url of feedUrls) {
+  for (const feed of feeds) {
+    // A feed is an RSS URL, or { index, links } for a publisher that has the section but
+    // no feed for it. A state the masthead covers daily is not worth leaving unsourced
+    // over a missing XML file.
+    const indexed = typeof feed !== 'string';
+    const url = indexed ? feed.index : feed;
     try {
-      const result = await request(url, { domains: SOURCE_DOMAINS, label: 'RSS feed', retries: 1 });
+      const result = await request(url, { domains: SOURCE_DOMAINS, label: indexed ? 'Section index' : 'RSS feed', retries: 1 });
+      const body = result.bytes.toString('utf8');
+      const parsed = indexed
+        ? parseIndex(body, url, feed.links)
+        : parseFeed(body, now).sort((first, second) => second.publishedAt.localeCompare(first.publishedAt));
       const items = [];
-      for (const source of parseFeed(result.bytes.toString('utf8'), now)) {
+      for (const source of parsed) {
         if (seen.has(source.id)) continue;
         seen.add(source.id);
         items.push(source);
       }
-      perFeed.push(items.sort((first, second) => second.publishedAt.localeCompare(first.publishedAt)));
+      perFeed.push(items);
     } catch (error) { warnings.push(`Feed ${new URL(url).hostname}: ${error.message}`); }
   }
   // Round-robin by rank, not one flat date sort. A high-volume feed fills every fetch slot
@@ -175,12 +221,36 @@ export async function collectSources(feedUrls, now, warnings, excluded = new Set
   // BBC Sport crowded out Bhaskar sports completely, leaving a Hindi category sourced
   // entirely from English wire copy, and Bhaskar lifestyle did the same to ABP earlier.
   const sources = [];
+  const tally = new Map();
   for (const source of interleaveByRank(perFeed, 10)) {
+    const host = new URL(source.url).hostname.replace(/^www\./, '');
+    const count = tally.get(host) ?? { tried: 0, ok: 0, reason: '' };
+    count.tried++;
+    tally.set(host, count);
     try {
       const result = await request(source.url, { domains: SOURCE_DOMAINS, label: 'Source article', retries: 0 });
-      sources.push({ ...source, text: extractArticle(result.bytes.toString('utf8')) });
+      const body = result.bytes.toString('utf8');
+      let { title, publishedAt } = source;
+      // parseFeed applies the 48-hour window to an RSS item before it is ever fetched. An
+      // index entry has no date to apply it to, so it is enforced here instead.
+      if (!publishedAt) {
+        const meta = articleMeta(body);
+        const age = now.getTime() - (meta.publishedAt?.getTime() ?? NaN);
+        assert(Number.isFinite(age) && age >= 0 && age <= 48 * 60 * 60 * 1000, 'Source article is undated or outside the 48-hour window');
+        assert(meta.title, 'Source article has no headline');
+        ({ title } = meta);
+        publishedAt = meta.publishedAt.toISOString();
+      }
+      sources.push({ ...source, title, publishedAt, text: extractArticle(body) });
+      count.ok++;
       if (sources.length === 6) break;
-    } catch (error) { warnings.push(`Source ${source.id}: ${error.message}`); }
+    } catch (error) { count.reason = error.message; }
+  }
+  // One line per publisher, not one per article. Eight separate "insufficient readable
+  // article text" warnings read as noise and hid a real defect for weeks; "amarujala.com:
+  // 1 of 5 usable" reads as a publisher that has moved its body behind a meter.
+  for (const [host, count] of tally) {
+    if (count.ok < count.tried) warnings.push(`${host}: only ${count.ok} of ${count.tried} fetched article(s) usable (${count.reason})`);
   }
   return sources;
 }
@@ -249,7 +319,15 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     const bodyCharacters = characterCount(body);
     const totalCharacters = bodyCharacters + 1 + IMAGE_NOTICE_BUDGET;
     if (bodyCharacters < 1500 || totalCharacters > 2900) {
-      throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters}, includingImageNotice=${totalCharacters} Unicode characters). Body must contain at least 1500 characters; body plus the reserved ${IMAGE_NOTICE_BUDGET}-character image notice must not exceed 2900. Revise toward 2100-2500 body characters using only supplied source facts, and leave every evidence quote exactly as it is.`);
+      // Give the model arithmetic, not a target range. Two runs were lost to bodies of
+      // 1283 and 1403 characters: "revise toward 2100-2500" never told a weak model how
+      // far short it was, nor that its paragraphs were running at half the asked length.
+      const prose = article.blocks.filter((block) => block.type === 'paragraph');
+      const perParagraph = Math.round(characterCount(prose.map((block) => block.text).join('')) / Math.max(1, paragraphs));
+      const remedy = bodyCharacters < 1500
+        ? `It is ${1500 - bodyCharacters} characters below the floor and ${2100 - bodyCharacters} below target. Your ${paragraphs} paragraphs average ${perParagraph} characters each and must be 410-470 each. Expand EVERY paragraph using detail already present in the supplied sources; do not add paragraphs, repeat sentences, or invent facts.`
+        : `It is ${totalCharacters - 2900} characters over. Cut repetition and secondary detail from the longest paragraphs and keep all ${paragraphs} of them.`;
+      throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters}, includingImageNotice=${totalCharacters} Unicode characters). The body, headings included, must be 1500-${2900 - 1 - IMAGE_NOTICE_BUDGET} characters. ${remedy} Leave every evidence quote exactly as it is.`);
     }
     const visible = [article.title, article.district, ...article.tags, body].join(' ');
     assert(!/[a-z]/i.test(visible) && /[\u0900-\u097f]/.test(visible), `${category}: article must use Devanagari, not Latin text`);

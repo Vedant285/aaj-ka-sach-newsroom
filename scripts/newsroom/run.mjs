@@ -5,7 +5,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
 import {
-  CATEGORIES, PLACE_CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, ArticleEvidenceError, assert, batchPlan, collectSources, dayInIndia, makeDocument,
+  CATEGORIES, PLACE_CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, ArticleEvidenceError, GeminiResponseError, assert, batchPlan, characterCount, collectSources, dayInIndia, makeDocument,
   IMAGE_DOMAINS, findImage, imageContentType, postIds, request, requestJson, similarTitle, validateArticles, verifyPosts,
 } from './core.mjs';
 
@@ -75,10 +75,19 @@ export async function generate(config, prompt, category, sources, alreadyUsed, c
     }),
   });
   const candidate = response.candidates?.[0];
-  assert(candidate?.finishReason === 'STOP', 'Gemini response blocked or truncated; nothing published');
-  const text = (candidate.content?.parts ?? []).filter((part) => !part.thought).map((part) => part.text ?? '').join('');
+  const parts = (candidate?.content?.parts ?? []).filter((part) => !part.thought);
+  const text = parts.map((part) => part.text ?? '').join('');
+  // "Gemini response blocked or truncated" and "Gemini returned invalid JSON" threw away
+  // the only evidence of what went wrong, and a category died on a dead-end message. Say
+  // which way it failed and show enough of the response to tell truncation from refusal.
+  if (candidate?.finishReason !== 'STOP') {
+    const blocked = response.promptFeedback?.blockReason ? `, promptFeedback.blockReason=${response.promptFeedback.blockReason}` : '';
+    throw new GeminiResponseError(`Gemini stopped early: finishReason=${candidate?.finishReason ?? 'none'}${blocked}, ${characterCount(text)} characters returned. MAX_TOKENS means the response outgrew the output budget; SAFETY or RECITATION mean the request itself was refused.`);
+  }
   try { return JSON.parse(text); }
-  catch { throw new Error('Gemini returned invalid JSON; nothing published'); }
+  catch (error) {
+    throw new GeminiResponseError(`Gemini returned unparseable JSON (${error.message}): ${parts.length} content part(s), ${characterCount(text)} characters. Response starts: ${text.slice(0, 160).replace(/\s+/g, ' ') || '(empty)'}`);
+  }
 }
 
 async function verifyHomepage(client, posts) {
@@ -197,16 +206,33 @@ export async function main(args = process.argv.slice(2)) {
         console.log(`Generating and validating: ${category}`);
         let articles;
         let correctionRequest = null;
-        for (let attempt = 0; attempt < 2; attempt++) {
+        let corrected = false;
+        // Three requests at worst, but still only ONE content correction — that is what
+        // editorial-prompt.md promises the model. A response that arrived malformed
+        // carried no correction, so re-asking it unchanged must not spend that budget:
+        // a sports article that only needed lengthening was lost when the correction
+        // came back as unparseable JSON and the category had no attempts left.
+        for (let attempt = 0; attempt < 3; attempt++) {
           await sleep(Math.max(0, config.interval - (Date.now() - lastRequest)));
           lastRequest = Date.now();
-          const payload = await generate(config, prompt, category, sources, alreadyUsed, plan.perCategory, correctionRequest);
+          let payload;
+          try {
+            payload = await generate(config, prompt, category, sources, alreadyUsed, plan.perCategory, correctionRequest);
+          } catch (error) {
+            if (!(error instanceof GeminiResponseError) || attempt === 2) throw error;
+            const warning = `${category}: ${error.message} Asking again, unchanged.`;
+            report.warnings.push(warning);
+            console.warn(warning);
+            await writeReport();
+            continue;
+          }
           if (Array.isArray(payload.skipped) && payload.skipped.length) report.warnings.push(`${category}: model reported ${payload.skipped.length} skipped items`);
           try {
             articles = validateArticles(payload, category, sources, used, plan.perCategory);
             break;
           } catch (error) {
-            if (!(error instanceof ArticleStructureError || error instanceof ArticleLengthError || error instanceof ArticleEvidenceError) || attempt === 1 || JSON.stringify(payload).length > 40000) throw error;
+            if (!(error instanceof ArticleStructureError || error instanceof ArticleLengthError || error instanceof ArticleEvidenceError) || corrected || JSON.stringify(payload).length > 40000) throw error;
+            corrected = true;
             const warning = `${error.message} Requesting one correction; this consumes another Gemini request.`;
             report.warnings.push(warning);
             console.warn(warning);

@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  ArticleEvidenceError, CATEGORIES, batchPlan, characterCount, creditFreeLicense, eligibleImage, IMAGE_NOTICE_BUDGET,
-  imageNotice, interleaveByRank, makeDocument, photoScore, portableText, similarTitle, validateArticles, verifyPosts,
+  ArticleEvidenceError, ArticleLengthError, CATEGORIES, batchPlan, characterCount, creditFreeLicense, eligibleImage, IMAGE_NOTICE_BUDGET,
+  imageNotice, interleaveByRank, makeDocument, parseIndex, photoScore, portableText, similarTitle, validateArticles, verifyPosts,
 } from './core.mjs';
 
 // Offline only: no network, no credentials. Run with `npm test`.
+
+const feeds = JSON.parse(await readFile(new URL('./feeds.json', import.meta.url), 'utf8'));
 
 const image = (licenseUrl, extra = {}) => ({ mime: 'image/jpeg', width: 1280, extmetadata: { LicenseUrl: { value: licenseUrl }, ...extra } });
 
@@ -109,18 +111,45 @@ test('published documents carry no caption and no outbound links', () => {
   assert.ok(blocks.every((block) => block.markDefs.length === 0));
 });
 
-test('every category has at least one configured feed and none is shared', async () => {
-  const feeds = JSON.parse(await readFile(new URL('./feeds.json', import.meta.url), 'utf8'));
+test('every category has at least one configured source and none is shared', () => {
   const seen = new Map();
   for (const category of CATEGORIES) {
     assert.ok(Array.isArray(feeds[category]) && feeds[category].length, `${category} has no feed`);
-    for (const url of feeds[category]) {
+    for (const feed of feeds[category]) {
+      const url = typeof feed === 'string' ? feed : feed.index;
+      assert.ok(typeof url === 'string' && url.startsWith('https://'), `${category} has a malformed source entry`);
+      // An index entry without a link pattern would match every anchor on the page,
+      // including the section nav, and feed the model navigation chrome as evidence.
+      if (typeof feed !== 'string') assert.ok(feed.links, `${category} index entry has no links pattern`);
       // A feed shared by two categories guarantees overlapping pools, which is how
       // national stories ended up published under lifestyle.
       assert.ok(!seen.has(url), `${url} is shared by ${seen.get(url)} and ${category}`);
       seen.set(url, category);
     }
   }
+});
+
+test('a section index yields the source shape a feed does, deduplicated and host-checked', () => {
+  // No publisher reachable from CI has an Uttarakhand feed, so uk is sourced from
+  // Bhaskar's section index. The configured pattern must admit article URLs only: the
+  // page also links the section itself, other states, and the same story twice.
+  const index = feeds.uk.find((feed) => typeof feed !== 'string');
+  const sources = parseIndex(`<html><body>
+    <a href="/local/uttarakhand/dehradun/news/upl-final-2026-134567.html">UPL</a>
+    <a href="/local/uttarakhand/dehradun/news/upl-final-2026-134567.html?type=video">वही खबर, वीडियो</a>
+    <a href="/local/uttarakhand/">उत्तराखंड</a>
+    <a href="/local/up/lucknow/news/kisan-134001.html">यूपी</a>
+    <a href="https://www.bhaskar.com/local/uttarakhand/nainital/news/road-134777.html#top">नैनीताल</a>
+    <a href="https://example.com/local/uttarakhand/x/news/y-1.html">कहीं और</a>
+    <a>बिना लिंक</a></body></html>`, index.index, index.links);
+  assert.deepEqual(sources.map((source) => source.url), [
+    'https://www.bhaskar.com/local/uttarakhand/dehradun/news/upl-final-2026-134567.html',
+    'https://www.bhaskar.com/local/uttarakhand/nainital/news/road-134777.html',
+  ]);
+  // The date and headline are unknown until the article is fetched; collectSources
+  // reads them from the page and applies the 48-hour window there.
+  assert.ok(sources.every((source) => source.publishedAt === null && source.title === ''));
+  assert.equal(new Set(sources.map((source) => source.id)).size, 2);
 });
 
 test('a high-volume feed cannot starve a lower-volume feed on the same subject', () => {
@@ -155,7 +184,9 @@ const payloadFor = (quote) => ({
   }],
   skipped: [],
 });
-const validate = (quote) => validateArticles(payloadFor(quote), 'up', [{ id: SOURCE_ID, url: 'https://www.amarujala.com/a', title: 'स', text: SOURCE_TEXT }], [], 1);
+const SOURCE = [{ id: SOURCE_ID, url: 'https://www.amarujala.com/a', title: 'स', text: SOURCE_TEXT }];
+const validatePayload = (payload) => validateArticles(payload, 'up', SOURCE, [], 1);
+const validate = (quote) => validatePayload(payloadFor(quote));
 
 test('evidence must be a real quote, but re-wrapped whitespace is still a real quote', () => {
   assert.equal(validate(QUOTE)[0].sourceIds[0], SOURCE_ID);
@@ -169,4 +200,34 @@ test('a paraphrased quote is rejected, and the rejection is retryable', () => {
   // attempt, where a plain Error killed the category outright.
   assert.throws(() => validate('गेहूं की एक नई किस्म से पैदावार में भारी वृद्धि हुई है'), ArticleEvidenceError);
   assert.throws(() => validate(QUOTE.slice(0, 12)), ArticleEvidenceError);
+});
+
+const withParagraphs = (text) => {
+  const payload = payloadFor(QUOTE);
+  payload.articles[0].blocks = payload.articles[0].blocks.map((block) => (block.type === 'paragraph' ? { ...block, text } : block));
+  return payload;
+};
+
+test('a short body is told how short it is, not just that it is short', () => {
+  // Three CI runs died at 1283, 1403 and 1403 characters. "Revise toward 2100-2500"
+  // never told a weak model the size of its deficit or that its paragraphs were
+  // running at half length, so the one correction attempt was spent on a guess.
+  let caught;
+  try { validatePayload(withParagraphs('क'.repeat(270))); } catch (error) { caught = error; }
+  assert.ok(caught instanceof ArticleLengthError, `expected ArticleLengthError, got ${caught}`);
+  const body = Number(caught.message.match(/body=(\d+)/)[1]);
+  assert.ok(body < 1500);
+  assert.ok(caught.message.includes(`${1500 - body} characters below the floor`));
+  assert.match(caught.message, /Your 4 paragraphs average 270 characters each and must be 410-470 each/);
+  // The ceiling quoted to the author must be the one editorial-prompt.md advertises.
+  assert.match(caught.message, /must be 1500-2869 characters/);
+});
+
+test('an over-long body is told how much to cut', () => {
+  let caught;
+  try { validatePayload(withParagraphs('क'.repeat(800))); } catch (error) { caught = error; }
+  assert.ok(caught instanceof ArticleLengthError, `expected ArticleLengthError, got ${caught}`);
+  const total = Number(caught.message.match(/includingImageNotice=(\d+)/)[1]);
+  assert.ok(caught.message.includes(`It is ${total - 2900} characters over`));
+  assert.match(caught.message, /keep all 4 of them/);
 });
