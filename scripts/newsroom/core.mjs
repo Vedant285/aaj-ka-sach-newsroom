@@ -39,6 +39,7 @@ export function canonicalSource(value) {
 }
 
 export class QuotaError extends Error {}
+export class ArticleStructureError extends Error {}
 
 export async function request(url, { domains, label, retries = 2, maxBytes = 3_000_000, ...options }) {
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -168,7 +169,9 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     assert(article.blocks.every((block) => ['paragraph', 'heading', 'bullet'].includes(block.type) && typeof block.text === 'string' && block.text.trim()), `${category}: invalid block`);
     const paragraphs = article.blocks.filter((block) => block.type === 'paragraph').length;
     const headings = article.blocks.filter((block) => block.type === 'heading').length;
-    assert(paragraphs >= 4 && paragraphs <= 8 && headings >= 1 && headings <= 2 && article.blocks[0].type === 'paragraph', `${category}: incorrect article structure`);
+    if (!(paragraphs >= 4 && paragraphs <= 8 && headings >= 1 && headings <= 2 && article.blocks[0]?.type === 'paragraph')) {
+      throw new ArticleStructureError(`${category}: incorrect article structure (paragraphs=${paragraphs}, headings=${headings}, firstBlock=${article.blocks[0]?.type ?? 'missing'}). Expected 4-8 paragraph blocks, 1-2 heading blocks, and a paragraph first.`);
+    }
     const body = article.blocks.map((block) => block.text).join('\n');
     assert(characterCount(body) >= 1500 && characterCount(`${body}\nचित्र: प्रतीकात्मक तस्वीर।`) <= 2900, `${category}: body including the image notice must contain 1500-2900 characters`);
     const visible = [article.title, article.district, ...article.tags, body].join(' ');
