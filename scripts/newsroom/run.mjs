@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { load } from 'cheerio';
 import {
-  CATEGORIES, QuotaError, assert, batchPlan, collectSources, dayInIndia, findImage, makeDocument,
+  CATEGORIES, QuotaError, ArticleStructureError, assert, batchPlan, collectSources, dayInIndia, findImage, makeDocument,
   normalize, postIds, request, requestJson, validateArticles, verifyPosts,
 } from './core.mjs';
 
@@ -63,13 +63,13 @@ export function sanityClient(config) {
   };
 }
 
-export async function generate(config, prompt, category, sources, alreadyUsed, count = 2) {
+export async function generate(config, prompt, category, sources, alreadyUsed, count = 2, correctionRequest = null) {
   const response = await requestJson(`https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent`, {
     domains: ['generativelanguage.googleapis.com'], label: 'Gemini generation', method: 'POST',
     headers: { 'x-goog-api-key': config.key, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: prompt }] },
-      contents: [{ role: 'user', parts: [{ text: JSON.stringify({ category, requestedArticleCount: count, todayIST: dayInIndia(), sources, alreadyUsed }) }] }],
+      contents: [{ role: 'user', parts: [{ text: JSON.stringify({ category, requestedArticleCount: count, todayIST: dayInIndia(), sources, alreadyUsed, ...(correctionRequest ? { correctionRequest } : {}) }) }] }],
       generationConfig: { responseMimeType: 'application/json', maxOutputTokens: count === 1 ? 8000 : 14000 },
     }),
   });
@@ -173,12 +173,27 @@ export async function main(args = process.argv.slice(2)) {
         const fallback = [...(pools.others ?? []), ...(pools.world ?? []), ...(pools.mystery ?? [])].filter((source) => !used.has(source.id));
         const sources = [...new Map([...local, ...fallback].map((source) => [source.id, source])).values()].slice(0, 8);
         assert(sources.length >= plan.perCategory, `${category}: insufficient recent, readable sources`);
-        await sleep(Math.max(0, config.interval - (Date.now() - lastRequest)));
-        lastRequest = Date.now();
         console.log(`Generating and validating: ${category}`);
-        const payload = await generate(config, prompt, category, sources, alreadyUsed, plan.perCategory);
-        if (Array.isArray(payload.skipped) && payload.skipped.length) report.warnings.push(`${category}: model reported ${payload.skipped.length} skipped items`);
-        const articles = validateArticles(payload, category, sources, used, plan.perCategory);
+        let articles;
+        let correctionRequest = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await sleep(Math.max(0, config.interval - (Date.now() - lastRequest)));
+          lastRequest = Date.now();
+          const payload = await generate(config, prompt, category, sources, alreadyUsed, plan.perCategory, correctionRequest);
+          if (Array.isArray(payload.skipped) && payload.skipped.length) report.warnings.push(`${category}: model reported ${payload.skipped.length} skipped items`);
+          try {
+            articles = validateArticles(payload, category, sources, used, plan.perCategory);
+            break;
+          } catch (error) {
+            if (!(error instanceof ArticleStructureError) || attempt === 1 || JSON.stringify(payload).length > 40000) throw error;
+            const warning = `${error.message} Requesting one structural correction; this consumes another Gemini request.`;
+            report.warnings.push(warning);
+            console.warn(warning);
+            correctionRequest = { validationError: error.message, previousResponse: payload };
+            await writeReport();
+          }
+        }
+        assert(articles, `${category}: article validation did not complete`);
         const priorTitles = new Set(alreadyUsed.filter((title) => typeof title === 'string').map(normalize));
         assert(articles.every((article) => !priorTitles.has(normalize(article.title))), `${category}: headline duplicates another generated or recent article`);
         for (const article of articles) {
@@ -188,7 +203,9 @@ export async function main(args = process.argv.slice(2)) {
           article.image = await findImage(article.imageQuery);
         }
       } catch (error) {
-        report.warnings.push(`${category}: ${error.message}`);
+        const warning = error.message.startsWith(`${category}:`) ? error.message : `${category}: ${error.message}`;
+        report.warnings.push(warning);
+        console.warn(warning);
         if (error instanceof QuotaError || error.message.startsWith('Gemini generation:')) throw error;
       }
       await writeReport();
