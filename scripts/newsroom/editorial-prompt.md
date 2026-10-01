@@ -28,7 +28,8 @@ and 2,000-2,400 characters across the complete body, including headings and sepa
 using only supported facts. Do not output a two-block outline or placeholders.
 Use fluent Devanagari Hindi; no Latin letters in headlines, body, district, or tags.
 No byline or news outlet/agency name in article text; no PTI, ANI, एजेंसी,
-हमारे संवाददाता, or outlet credits. Preserve source URLs only in the sourceIds
+हमारे संवाददाता, or outlet credits such as दैनिक भास्कर, अमर उजाला, एबीपी, or बीबीसी.
+Preserve source URLs only in the sourceIds
 references supplied separately. Source attribution is stored in internal metadata.
 Write original text, not translations copied sentence-for-sentence from a publisher.
 The runner reserves the remaining characters up to 2,900 for an image notice that
