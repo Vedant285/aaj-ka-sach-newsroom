@@ -6,7 +6,7 @@ import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
 import {
   CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, assert, batchPlan, collectSources, dayInIndia, makeDocument,
-  IMAGE_DOMAINS, findImage, imageContentType, normalize, postIds, request, requestJson, validateArticles, verifyPosts,
+  IMAGE_DOMAINS, findImage, imageContentType, postIds, request, requestJson, similarTitle, validateArticles, verifyPosts,
 } from './core.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -101,7 +101,7 @@ async function verifyHomepage(client, posts) {
 function reportMarkdown(report) {
   const safe = (value) => String(value).replace(/[\r\n|<>]/g, ' ');
   const lines = [
-    '# Newsroom run', '', `Date (IST): ${report.day}`, `Mode: ${report.mode}`, `Requested articles: ${report.requestedCount}`, `Categories: ${report.categories.join(', ')}`, `Status: ${report.status}`, '',
+    '# Newsroom run', '', `Date (IST): ${report.day}`, `Mode: ${report.mode}`, `Requested articles: ${report.requestedCount}`, `Validated articles: ${report.articles.length}`, `Categories: ${report.categories.join(', ')}`, `Status: ${report.status}`, '',
     'Generated content and image relevance require editorial review. Automated checks do not establish factual accuracy.', '',
     '| Category | Headline | Published UTC | Image licence |', '| --- | --- | --- | --- |',
     ...report.articles.map((article) => `| ${safe(article.category)} | ${safe(article.title)} | ${safe(article.publishedAt ?? 'not published')} | ${safe(article.image?.license ?? article.newsroom?.image?.license ?? 'not resolved')} |`),
@@ -112,10 +112,7 @@ function reportMarkdown(report) {
     for (const source of article.sources ?? article.newsroom?.sources ?? []) lines.push(`  - Source: ${safe(source.url)}`);
     const image = article.image ?? article.newsroom?.image;
     if (image) {
-      lines.push(`  - Image: ${safe(image.pageUrl)}; ${safe(image.license)}; creator: ${safe(image.creator)}`);
-      lines.push(image.attribution
-        ? `  - Credit REQUIRED, published as: ${safe(image.attribution)}`
-        : '  - No credit required (CC0 / public domain).');
+      lines.push(`  - Image: ${safe(image.pageUrl)}; ${safe(image.license)}; creator: ${safe(image.creator)} (credit-free licence; no on-page credit published)`);
       if (/^photo-[a-z]+-\d+\.(png|jpg|webp)$/.test(image.fileName ?? '')) lines.push('', `![Representative photo](./${image.fileName})`, '');
     } else lines.push('  - No image: article is ready for text-only publication.');
   }
@@ -164,7 +161,10 @@ export async function main(args = process.argv.slice(2)) {
       console.log('This IST day already has a complete batch. No generation or writes performed.');
       return;
     }
-    const recent = await client.query('*[_type == "post" && publishedAt >= $since && !(_id in path("drafts.**"))]{title,"sourceIds":newsroom.sourceIds}', { since: new Date(now.getTime() - 72 * 3600000).toISOString() });
+    // Fourteen days, not three. parseFeed already drops items older than 48 hours, so a
+    // repeat of the same URL was never possible past 72 hours anyway; the long window
+    // exists for headlines — the same story picked up later by a different outlet.
+    const recent = await client.query('*[_type == "post" && publishedAt >= $since && !(_id in path("drafts.**"))] | order(publishedAt desc){title,"sourceIds":newsroom.sourceIds}', { since: new Date(now.getTime() - 14 * 24 * 3600000).toISOString() });
     const used = new Set(recent.flatMap((post) => post.sourceIds ?? []));
     const prompt = await readFile(new URL('./editorial-prompt.md', import.meta.url), 'utf8');
     const pools = {};
@@ -174,7 +174,9 @@ export async function main(args = process.argv.slice(2)) {
       pools[category] = await collectSources(feeds[category], now, report.warnings, used);
     }
     let lastRequest = 0;
-    const alreadyUsed = recent.map((post) => post.title).slice(0, 100);
+    // Every source ID is kept (short strings, exact matching), but the titles go into the
+    // prompt, so only the newest 120 are carried to keep the request size sane.
+    const alreadyUsed = recent.map((post) => post.title).filter((title) => typeof title === 'string').slice(0, 120);
     for (const category of plan.categories) {
       try {
         const local = pools[category].filter((source) => !used.has(source.id));
@@ -207,9 +209,20 @@ export async function main(args = process.argv.slice(2)) {
           }
         }
         assert(articles, `${category}: article validation did not complete`);
-        const priorTitles = new Set(alreadyUsed.filter((title) => typeof title === 'string').map(normalize));
-        assert(articles.every((article) => !priorTitles.has(normalize(article.title))), `${category}: headline duplicates another generated or recent article`);
-        for (const article of articles) {
+        // Drop near-duplicates of anything already published or generated earlier in this
+        // batch, rather than failing the category: one repeated story should not also cost
+        // the fresh article next to it.
+        const fresh = articles.filter((article) => {
+          const clash = alreadyUsed.find((title) => similarTitle(title, article.title));
+          if (clash) {
+            report.warnings.push(`${category}: skipped "${article.title}" as a repeat of "${clash}"`);
+            // Burn the sources too, so a later category cannot pick the same story up again.
+            article.sourceIds.forEach((sourceId) => used.add(sourceId));
+          }
+          return !clash;
+        });
+        assert(fresh.length, `${category}: every generated headline repeats a recent article`);
+        for (const article of fresh) {
           article.sourceIds.forEach((sourceId) => used.add(sourceId));
           alreadyUsed.push(article.title);
           report.articles.push(article);
@@ -239,8 +252,16 @@ export async function main(args = process.argv.slice(2)) {
       }
       await writeReport();
     }
-    assert(report.articles.length === plan.count, `Batch incomplete: need ${plan.count} validated article(s). No posts published. See report.`);
-    const documents = report.articles.map((article, index) => makeDocument(article, index, day, now, 'dry-run-placeholder', plan));
+    assert(report.articles.length >= plan.minimum, `Batch too small: got ${report.articles.length} validated article(s), need at least ${plan.minimum} of ${plan.count}. No posts published. See report.`);
+    if (report.articles.length < plan.count) report.warnings.push(`Publishing ${report.articles.length} of ${plan.count} articles; ${plan.count - report.articles.length} slot(s) had no usable source or failed validation.`);
+    // Slots are per-category, not derived from the overall index: a category that yielded
+    // only one article would otherwise shift every later article onto the wrong ID.
+    const slots = new Map();
+    const documents = report.articles.map((article, index) => {
+      const slot = (slots.get(article.category) ?? 0) + 1;
+      slots.set(article.category, slot);
+      return makeDocument(article, index, day, now, 'dry-run-placeholder', plan, slot);
+    });
     report.verification = verifyPosts(documents, day, plan);
     await writeFile(resolve(output, 'documents.json'), JSON.stringify(documents, null, 2));
     if (mode === 'dry-run') {
@@ -265,7 +286,7 @@ export async function main(args = process.argv.slice(2)) {
     for (let attempt = 0; attempt < 3; attempt++) {
       await sleep(2000);
       published = await getBatch();
-      if (published.length === plan.count) break;
+      if (published.length === documents.length) break;
     }
     report.verification = verifyPosts(published, day, plan);
     report.articles = published;

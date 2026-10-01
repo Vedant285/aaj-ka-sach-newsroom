@@ -6,15 +6,18 @@ import { XMLParser } from 'fast-xml-parser';
 export const CATEGORIES = ['up', 'uk', 'delhi', 'world', 'dharma', 'business', 'sports', 'others', 'mystery', 'lifestyle'];
 const SOURCE_DOMAINS = ['amarujala.com', 'bhaskar.com', 'abplive.com', 'bbc.co.uk', 'bbci.co.uk', 'bbc.com', 'sciencedaily.com', 'nasa.gov'];
 export const IMAGE_DOMAINS = ['upload.wikimedia.org', 'thumb.wikimedia.org'];
-// Characters reserved in the body budget for the image notice, which now carries
-// the Creative Commons credit required by CC BY / CC BY-SA.
-export const IMAGE_NOTICE_BUDGET = 160;
+// Characters reserved in the body budget for the image notice. Only credit-free
+// licences are accepted, so the notice is a fixed illustrative-photo disclosure.
+export const IMAGE_NOTICE_BUDGET = 30;
 export const hash = (text) => createHash('sha256').update(text).digest('hex').slice(0, 24);
 export const dayInIndia = (date = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 export function batchPlan(count = 20, category = 'up') {
   assert([1, 20].includes(count), 'Article count must be 1 or 20');
   assert(CATEGORIES.includes(category), 'Unknown newsroom category');
-  return { count, categories: count === 1 ? [category] : CATEGORIES, perCategory: count === 1 ? 1 : 2, prefix: count === 1 ? 'newsroom-test' : 'newsroom' };
+  // minimum is what the batch must reach to be worth publishing. Ten categories each
+  // depend on live third-party feeds, so demanding all 20 means one dry feed throws
+  // away nineteen good articles.
+  return { count, minimum: count === 1 ? 1 : 12, categories: count === 1 ? [category] : CATEGORIES, perCategory: count === 1 ? 1 : 2, prefix: count === 1 ? 'newsroom-test' : 'newsroom' };
 }
 export const postIds = (day, plan = batchPlan()) => plan.categories.flatMap((category) => Array.from({ length: plan.perCategory }, (_, index) => `${plan.prefix}-${day}-${category}-${index + 1}`));
 export const characterCount = (text) => Array.from(text).length;
@@ -156,6 +159,28 @@ export async function collectSources(feedUrls, now, warnings, excluded = new Set
   return sources;
 }
 
+// Function words carry no topic. Without dropping them, any two Hindi headlines
+// overlap on के/में/से alone and every article looks like a duplicate of every other.
+const HINDI_STOPWORDS = new Set(['के', 'का', 'की', 'को', 'में', 'से', 'पर', 'और', 'है', 'हैं', 'था', 'थी', 'थे', 'एक', 'यह', 'वह', 'इस', 'उस', 'जो', 'ने', 'भी', 'कि', 'लिए', 'साथ', 'तक', 'या', 'नहीं', 'तो', 'ही', 'अब', 'बाद', 'कर', 'करने', 'हुआ', 'हुई', 'हुए', 'गया', 'गई', 'गए', 'रहा', 'रही', 'रहे', 'दिया', 'दी', 'दिए']);
+
+// Devanagari matras are combining marks, so \p{M} must count as part of a word:
+// without it "में" splits into a bare "म" and the stopword list never matches.
+export const titleTerms = (title) => new Set(
+  normalize(String(title ?? '')).split(/[^\p{L}\p{N}\p{M}]+/u).filter((word) => characterCount(word) >= 2 && !HINDI_STOPWORDS.has(word)),
+);
+
+// Containment of the shorter headline in the longer one, not Jaccard: a follow-up that
+// adds detail keeps every original term and adds more, which Jaccard scores as half a
+// match. Deliberately strict — a false positive silently costs a publishable article.
+export function similarTitle(first, second, threshold = 0.7) {
+  if (normalize(String(first ?? '')) === normalize(String(second ?? ''))) return true;
+  const left = titleTerms(first);
+  const right = titleTerms(second);
+  if (left.size < 3 || right.size < 3) return false;
+  const shared = [...left].filter((term) => right.has(term)).length;
+  return shared / Math.min(left.size, right.size) >= threshold;
+}
+
 export function validateArticles(payload, category, sources, alreadyUsed = new Set(), count = 2) {
   assert(CATEGORIES.includes(category), 'Invalid category');
   assert([1, 2].includes(count), 'Expected one or two articles per category');
@@ -168,8 +193,8 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     assert(article && typeof article === 'object', `${category}: invalid article`);
     assert(!('author' in article) && !('reporter' in article), `${category}: bylines are forbidden`);
     assert(typeof article.title === 'string' && article.title.length >= 10 && article.title.length <= 220, `${category}: invalid headline`);
-    assert(!titles.has(normalize(article.title)), `${category}: duplicate headline`);
-    titles.add(normalize(article.title));
+    assert(![...titles].some((seen) => similarTitle(seen, article.title)), `${category}: duplicate or near-duplicate headline`);
+    titles.add(article.title);
     assert(typeof article.slug === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(article.slug) && article.slug.length <= 90 && !slugs.has(article.slug), `${category}: invalid or duplicate slug`);
     slugs.add(article.slug);
     assert(typeof article.district === 'string', `${category}: invalid district`);
@@ -225,36 +250,33 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
   });
 }
 
-// Licences we accept. CC0 and the public-domain mark need no credit; CC BY and
-// CC BY-SA do, and that credit is rendered in the caption and the body notice.
-const CC_GRANTS = [
-  { pattern: /^\/publicdomain\/zero\/1\.0(?:\/|$)/, attribution: false },
-  { pattern: /^\/publicdomain\/mark\/1\.0(?:\/|$)/, attribution: false },
-  { pattern: /^\/licenses\/by\/(?:2\.0|2\.5|3\.0|4\.0)(?:\/|$)/, attribution: true },
-  { pattern: /^\/licenses\/by-sa\/(?:2\.0|2\.5|3\.0|4\.0)(?:\/|$)/, attribution: true },
+// Licences we accept: CC0 and the public-domain mark only. The website has nowhere
+// to display a photo credit, so CC BY and CC BY-SA are deliberately excluded rather
+// than used without the attribution their deeds require.
+const CC_DEEDS = [
+  /^\/publicdomain\/zero\/1\.0(?:\/|$)/,
+  /^\/publicdomain\/mark\/1\.0(?:\/|$)/,
 ];
 
-export function licenseGrant(value) {
+export function creditFreeLicense(value) {
   try {
     const url = new URL(value);
-    if (!['https:', 'http:'].includes(url.protocol)) return null;
-    if (url.hostname !== 'creativecommons.org' || url.username || url.password || url.port) return null;
-    return CC_GRANTS.find((grant) => grant.pattern.test(url.pathname)) ?? null;
-  } catch { return null; }
+    if (!['https:', 'http:'].includes(url.protocol)) return false;
+    if (url.hostname !== 'creativecommons.org' || url.username || url.password || url.port) return false;
+    return CC_DEEDS.some((deed) => deed.test(url.pathname));
+  } catch { return false; }
 }
 
-// Returns a grant descriptor ({ attribution }) for a usable file, otherwise null.
-// NonCommercial and NoDerivatives deeds are absent from CC_GRANTS, so they are rejected.
+// True only for a file that may be republished with no credit line. Attribution,
+// NonCommercial and NoDerivatives deeds are absent from CC_DEEDS, so all are rejected.
 export function eligibleImage(info) {
   const metadata = info.extmetadata ?? {};
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(info.mime) || !(info.width >= 800)) return null;
-  if (!['', 'false', '0'].includes(plainText(metadata.NonFree?.value).toLowerCase())) return null;
-  if (plainText(metadata.Restrictions?.value)) return null;
-  const grant = licenseGrant(plainText(metadata.LicenseUrl?.value));
-  if (grant) return grant;
-  const publicDomain = plainText(metadata.LicenseShortName?.value) === 'Public domain'
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(info.mime) || !(info.width >= 800)) return false;
+  if (!['', 'false', '0'].includes(plainText(metadata.NonFree?.value).toLowerCase())) return false;
+  if (plainText(metadata.Restrictions?.value)) return false;
+  if (creditFreeLicense(plainText(metadata.LicenseUrl?.value))) return true;
+  return plainText(metadata.LicenseShortName?.value) === 'Public domain'
     && plainText(metadata.Copyrighted?.value).toLowerCase() === 'false';
-  return publicDomain ? { attribution: false } : null;
 }
 
 export function photoMatches(page, info, query) {
@@ -280,6 +302,10 @@ export function photoScore(page, info, query) {
   const title = plainText(page.title).replace(/^File:/i, '').replace(/[_-]/g, ' ');
   const context = `${title} ${description} ${categories}`;
   if (/watermark|ai[ -]generated|artificial intelligence|stable diffusion|midjourney|dall[ -]?e|computer[ -]generated|screenshot|\blogos?\b|\bdiagrams?\b|illustration|\bpaintings?\b|\bdrawings?\b|\bmaps?\b|engraving|woodcut|lithograph|etching|\bsketch(?:es)?\b|pd-old/i.test(context)) return 0;
+  // Museum pieces score full marks on text — a Greek terracotta "figurine kneading
+  // dough" is a perfect term match for a story about storing dough, and a useless
+  // photo of it. Reject the artefact vocabulary outright.
+  if (/\bfigurines?\b|\bstatuettes?\b|\bstatues?\b|terracotta|\bsculptures?\b|\bcarvings?\b|\bamphora\b|\bpottery\b|\bartefacts?\b|\bartifacts?\b|\bbas[ -]relief\b|\bfrescoe?s?\b|\bmosaics?\b|\btapestr(?:y|ies)\b|\bmanuscripts?\b/i.test(context)) return 0;
   // Historical prints and scanned book plates are public domain and score well on text,
   // but a 1909 engraving is not a representative photo of a present-day subject.
   const year = Number(plainText(metadata.DateTimeOriginal?.value).match(/\b([12][0-9]{3})\b/)?.[1]);
@@ -304,19 +330,13 @@ export function imageContentType(bytes) {
   throw new Error('Image has unsupported file signature');
 }
 
-const CREATOR_LIMIT = 60;
+// Not a credit — CC0 and public-domain photos need none. This is the disclosure that
+// the photo illustrates the subject rather than showing the reported event itself.
+export const IMAGE_NOTICE = 'चित्र: प्रतीकात्मक तस्वीर।';
+export const IMAGE_CAPTION = 'प्रतीकात्मक तस्वीर';
 
-export function imageCredit(creator, license) {
-  const name = normalize(creator) || 'अज्ञात';
-  const clamped = characterCount(name) > CREATOR_LIMIT ? `${Array.from(name).slice(0, CREATOR_LIMIT - 1).join('')}…` : name;
-  return `${clamped} / ${license || 'Creative Commons'}, विकिमीडिया कॉमन्स`;
-}
-
-export function imageNotice(image) {
-  const base = 'चित्र: प्रतीकात्मक तस्वीर।';
-  if (!image?.attribution) return base;
-  const notice = `${base} साभार: ${image.attribution}`;
-  return characterCount(notice) <= IMAGE_NOTICE_BUDGET ? notice : `${Array.from(notice).slice(0, IMAGE_NOTICE_BUDGET - 1).join('')}…`;
+export function imageNotice() {
+  return IMAGE_NOTICE;
 }
 
 export async function findImage(query, fallbackQueries = []) {
@@ -339,26 +359,25 @@ export async function findImage(query, fallbackQueries = []) {
     for (const page of pages) {
       const info = page.imageinfo?.[0];
       if (!info) continue;
-      const grant = eligibleImage(info);
-      if (!grant) continue;
+      if (!eligibleImage(info)) continue;
       const score = photoScore(page, info, searchQuery);
       // Commons orders by its own text relevance, which happily puts an obscure tool
       // above the actual subject. Rank the whole page and keep the best, rather than
       // taking the first thing that clears the bar.
-      if (score > 0 && (!best || score > best.score)) best = { page, info, grant, score };
+      if (score > 0 && (!best || score > best.score)) best = { page, info, score };
       if (best?.score >= 3) break;
     }
     if (!best) continue;
-    const { page, info, grant } = best;
-    const license = plainText(info.extmetadata?.LicenseShortName?.value);
-    const creator = plainText(info.extmetadata?.Artist?.value);
-    const attribution = grant.attribution ? imageCredit(creator, license) : '';
+    const { page, info } = best;
     const download = safeUrl(info.thumburl ?? info.url, IMAGE_DOMAINS).href;
     const match = {
       kind: 'real-photo', title: page.title, download, pageUrl: safeUrl(info.descriptionurl, ['commons.wikimedia.org']).href,
-      license, creator, attribution,
+      // Licence and creator need no on-page credit under CC0 / public domain. They are
+      // kept as the provenance record in newsroom.image, not for publication.
+      license: plainText(info.extmetadata?.LicenseShortName?.value),
+      creator: plainText(info.extmetadata?.Artist?.value),
       licenseUrl: plainText(info.extmetadata?.LicenseUrl?.value),
-      caption: attribution ? `प्रतीकात्मक तस्वीर — ${attribution}` : 'प्रतीकात्मक तस्वीर',
+      caption: IMAGE_CAPTION,
       searchQuery, matchScore: Number(best.score.toFixed(2)),
     };
     // A weak best is worth one look at the next query, which is usually broader and
@@ -367,7 +386,7 @@ export async function findImage(query, fallbackQueries = []) {
     weak ??= match;
   }
   if (weak) return weak;
-  throw new Error(`No reusable CC0/public-domain/CC BY/CC BY-SA image after ${queries.length} search(es), ${candidates} candidate(s); review or broaden the image queries`);
+  throw new Error(`No credit-free CC0/public-domain image after ${queries.length} search(es), ${candidates} candidate(s); review or broaden the image queries`);
 }
 
 export function portableText(article) {
@@ -378,13 +397,15 @@ export function portableText(article) {
   }));
 }
 
-export function makeDocument(article, index, day, now, assetId, plan = batchPlan()) {
-  const slot = index % plan.perCategory + 1;
+// slot is the article's 1-based position within its own category. It defaults to the
+// even-spread assumption, but a caller publishing a partial batch must pass a real
+// per-category counter so a short category does not shift every later article's ID.
+export function makeDocument(article, index, day, now, assetId, plan = batchPlan(), slot = index % plan.perCategory + 1) {
   return {
     _id: `${plan.prefix}-${day}-${article.category}-${slot}`, _type: 'post',
     title: article.title, slug: { _type: 'slug', current: `${article.slug}-${article.sourceIds[0].slice(0, 8)}` },
     category: article.category, district: article.district, tags: article.tags, body: portableText(article),
-    ...(article.image ? { mainImage: { _type: 'image', asset: { _type: 'reference', _ref: assetId }, alt: article.title, caption: article.image.caption } } : {}),
+    ...(article.image ? { mainImage: { _type: 'image', asset: { _type: 'reference', _ref: assetId }, alt: article.title } } : {}),
     editorialStatus: 'approved', webPriority: 60, isBreaking: false,
     publishedAt: new Date(now.getTime() - (plan.count - 1 - index) * 1000).toISOString(),
     newsroom: { day, batchSize: plan.count, sourceIds: article.sourceIds, sources: article.sources, evidence: article.evidence, image: article.image },
@@ -393,9 +414,10 @@ export function makeDocument(article, index, day, now, assetId, plan = batchPlan
 
 export function verifyPosts(posts, day, plan = batchPlan()) {
   const expectedIds = new Set(postIds(day, plan));
-  assert(posts.length === plan.count && new Set(posts.map((post) => post._id)).size === plan.count, `Expected ${plan.count} distinct batch post(s)`);
+  assert(posts.length >= plan.minimum && posts.length <= plan.count && new Set(posts.map((post) => post._id)).size === posts.length, `Expected ${plan.minimum}-${plan.count} distinct batch post(s), got ${posts.length}`);
   const lengths = [];
-  for (const category of plan.categories) assert(posts.filter((post) => post.category === category).length === plan.perCategory, `Expected ${plan.perCategory} post(s) in ${category}`);
+  const counts = Object.fromEntries(plan.categories.map((category) => [category, posts.filter((post) => post.category === category).length]));
+  for (const category of plan.categories) assert(counts[category] <= plan.perCategory, `Expected at most ${plan.perCategory} post(s) in ${category}`);
   for (const post of posts) {
     assert(expectedIds.has(post._id), 'Unexpected batch post ID');
     assert(post.editorialStatus === 'approved', 'Missing approval');
@@ -410,7 +432,7 @@ export function verifyPosts(posts, day, plan = batchPlan()) {
     assert(length >= 1500 && length <= 2900, 'Invalid published body length');
     lengths.push(length);
   }
-  assert(new Set(posts.map((post) => post.slug.current)).size === plan.count, 'Duplicate published slug');
+  assert(new Set(posts.map((post) => post.slug.current)).size === posts.length, 'Duplicate published slug');
   const withImages = posts.filter((post) => post.mainImage?.asset?._ref).length;
-  return { count: posts.length, withImages, withoutImages: posts.length - withImages, approved: posts.length, bylines: 0, perCategory: Object.fromEntries(plan.categories.map((category) => [category, plan.perCategory])), bodyLength: { min: Math.min(...lengths), max: Math.max(...lengths), average: Math.round(lengths.reduce((sum, length) => sum + length, 0) / lengths.length) } };
+  return { count: posts.length, requested: plan.count, shortfall: plan.count - posts.length, withImages, withoutImages: posts.length - withImages, approved: posts.length, bylines: 0, perCategory: counts, bodyLength: { min: Math.min(...lengths), max: Math.max(...lengths), average: Math.round(lengths.reduce((sum, length) => sum + length, 0) / lengths.length) } };
 }

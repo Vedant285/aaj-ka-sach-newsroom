@@ -1,12 +1,12 @@
 {
   "up": ["https://www.bhaskar.com/rss-v1--category-2052.xml", "https://www.amarujala.com/rss/uttar-pradesh.xml"],
-  "uk": ["https://feeds.bbci.co.uk/hindi/rss.xml", "https://www.amarujala.com/rss/uttarakhand.xml"],
-  "delhi": ["https://www.bhaskar.com/rss-v1--category-1061.xml", "https://www.amarujala.com/rss/delhi.xml"],
+  "uk": ["https://www.amarujala.com/rss/uttarakhand.xml"],
+  "delhi": ["https://www.abplive.com/states/delhi-ncr/feed"],
   "world": ["https://www.bhaskar.com/rss-v1--category-1125.xml", "https://feeds.bbci.co.uk/news/world/rss.xml"],
-  "dharma": ["https://feeds.bbci.co.uk/hindi/rss.xml", "https://www.amarujala.com/rss/spirituality.xml"],
+  "dharma": ["https://www.abplive.com/religion/feed", "https://www.amarujala.com/rss/spirituality.xml"],
   "business": ["https://www.bhaskar.com/rss-v1--category-1051.xml", "https://www.abplive.com/business/feed"],
   "sports": ["https://www.bhaskar.com/rss-v1--category-1053.xml", "https://feeds.bbci.co.uk/sport/rss.xml"],
   "others": ["https://www.bhaskar.com/rss-v1--category-1061.xml", "https://www.abplive.com/news/feed"],
-  "mystery": ["https://www.sciencedaily.com/rss/fossils_ruins.xml", "https://www.nasa.gov/feed/"],
-  "lifestyle": ["https://www.bhaskar.com/rss-v1--category-1057.xml", "https://www.abplive.com/lifestyle/feed"]
+  "mystery": ["https://www.sciencedaily.com/rss/space_time.xml", "https://www.sciencedaily.com/rss/strange_offbeat.xml", "https://www.abplive.com/gk/feed"],
+  "lifestyle": ["https://www.abplive.com/lifestyle/feed", "https://www.abplive.com/photo-gallery/lifestyle/feed"]
 }

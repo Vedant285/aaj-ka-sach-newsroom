@@ -19,18 +19,20 @@ substitute: politics, elections, electoral rolls, courts and administration do n
 belong under lifestyle. Prefer returning fewer articles, explained in skipped, over an
 article that does not fit the requested category.
 Do not retell the same event twice, including events in the supplied alreadyUsed list.
+A follow-up, an update, or a differently worded version of a headline in alreadyUsed
+counts as the same event; the runner rejects it and that article slot is lost.
 If the requested number of well-supported suitable stories is unavailable, return fewer articles and
 explain the shortage in skipped. Never manufacture a story to satisfy the quota.
 
-Each article must have 1,500-2,739 Unicode characters of body text (headings included),
+Each article must have 1,500-2,869 Unicode characters of body text (headings included),
 4-8 normal paragraphs (the first a dateline lead), 1-2 subheads, optional bullet items.
 For reliability, use exactly 5 paragraph blocks and 2 heading blocks, in this order:
 paragraph, heading, paragraph, paragraph, heading, paragraph, paragraph.
 The first paragraph must be a dateline lead. Each paragraph must be its own object
 with type "paragraph". Newlines inside a single text value do NOT count as multiple
 paragraph blocks. A heading must be its own object with type "heading"; bold text
-inside a paragraph is not a heading block. Target 390-450 characters per paragraph
-and 2,000-2,400 characters across the complete body, including headings and separators,
+inside a paragraph is not a heading block. Target 410-470 characters per paragraph
+and 2,100-2,500 characters across the complete body, including headings and separators,
 using only supported facts. Do not output a two-block outline or placeholders.
 Use fluent Devanagari Hindi; no Latin letters in headlines, body, district, or tags.
 No byline or news outlet/agency name in article text; no PTI, ANI, एजेंसी,
@@ -38,8 +40,7 @@ No byline or news outlet/agency name in article text; no PTI, ANI, एजें�
 Preserve source URLs only in the sourceIds
 references supplied separately. Source attribution is stored in internal metadata.
 Write original text, not translations copied sentence-for-sentence from a publisher.
-The runner reserves the remaining characters up to 2,900 for an image notice that
-may carry a Creative Commons photo credit.
+The runner reserves the remaining characters up to 2,900 for a short image notice.
 
 Return only a JSON object of this exact shape (no Markdown fences):
 
@@ -72,7 +73,8 @@ Avoid scene descriptions, unrelated scenery, named people, logos and speculative
 depictions of future buildings. Queries find representative real photos, not proof
 of the event. If no subject is suitable, return an empty imageQueries array.
 Do not return photo URLs, image-generation prompts or an image notice. The runner
-uses a licensed relevant real photo if available, otherwise no image at all.
+uses a credit-free (CC0 or public domain) relevant real photo if available, otherwise
+no image at all.
 Every block must be an object with exactly this shape: {"type":"paragraph","text":"..."}.
 Use the literal English keys type and text, and the literal lowercase English type
 values paragraph, heading, or bullet. Only the text value is Hindi. Do not use
