@@ -6,7 +6,9 @@ import { XMLParser } from 'fast-xml-parser';
 export const CATEGORIES = ['up', 'uk', 'delhi', 'world', 'dharma', 'business', 'sports', 'others', 'mystery', 'lifestyle'];
 const SOURCE_DOMAINS = ['amarujala.com', 'jagran.com', 'bbc.co.uk', 'bbci.co.uk', 'bbc.com', 'sciencedaily.com', 'nasa.gov'];
 export const IMAGE_DOMAINS = ['upload.wikimedia.org', 'thumb.wikimedia.org'];
-export const HEADLINE_CARD_NOTICE = 'चित्र: समाचार सार — वास्तविक घटना की तस्वीर नहीं।';
+// Characters reserved in the body budget for the image notice, which now carries
+// the Creative Commons credit required by CC BY / CC BY-SA.
+export const IMAGE_NOTICE_BUDGET = 160;
 export const hash = (text) => createHash('sha256').update(text).digest('hex').slice(0, 24);
 export const dayInIndia = (date = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 export function batchPlan(count = 20, category = 'up') {
@@ -190,9 +192,9 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     }
     const body = article.blocks.map((block) => block.text).join('\n');
     const bodyCharacters = characterCount(body);
-    const totalCharacters = characterCount(`${body}\nचित्र: प्रतीकात्मक तस्वीर।`);
+    const totalCharacters = bodyCharacters + 1 + IMAGE_NOTICE_BUDGET;
     if (bodyCharacters < 1500 || totalCharacters > 2900) {
-      throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters}, includingImageNotice=${totalCharacters} Unicode characters). Body must contain at least 1500 characters; body including the image notice must not exceed 2900. Revise toward 2000-2400 body characters using only supplied source facts.`);
+      throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters}, includingImageNotice=${totalCharacters} Unicode characters). Body must contain at least 1500 characters; body plus the reserved ${IMAGE_NOTICE_BUDGET}-character image credit must not exceed 2900. Revise toward 2000-2400 body characters using only supplied source facts.`);
     }
     const visible = [article.title, article.district, ...article.tags, body].join(' ');
     assert(!/[a-z]/i.test(visible) && /[\u0900-\u097f]/.test(visible), `${category}: article must use Devanagari, not Latin text`);
@@ -219,28 +221,36 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
   });
 }
 
+// Licences we accept. CC0 and the public-domain mark need no credit; CC BY and
+// CC BY-SA do, and that credit is rendered in the caption and the body notice.
+const CC_GRANTS = [
+  { pattern: /^\/publicdomain\/zero\/1\.0(?:\/|$)/, attribution: false },
+  { pattern: /^\/publicdomain\/mark\/1\.0(?:\/|$)/, attribution: false },
+  { pattern: /^\/licenses\/by\/(?:2\.0|2\.5|3\.0|4\.0)(?:\/|$)/, attribution: true },
+  { pattern: /^\/licenses\/by-sa\/(?:2\.0|2\.5|3\.0|4\.0)(?:\/|$)/, attribution: true },
+];
+
+export function licenseGrant(value) {
+  try {
+    const url = new URL(value);
+    if (!['https:', 'http:'].includes(url.protocol)) return null;
+    if (url.hostname !== 'creativecommons.org' || url.username || url.password || url.port) return null;
+    return CC_GRANTS.find((grant) => grant.pattern.test(url.pathname)) ?? null;
+  } catch { return null; }
+}
+
+// Returns a grant descriptor ({ attribution }) for a usable file, otherwise null.
+// NonCommercial and NoDerivatives deeds are absent from CC_GRANTS, so they are rejected.
 export function eligibleImage(info) {
   const metadata = info.extmetadata ?? {};
-  const license = plainText(metadata.LicenseShortName?.value);
-  let cc0License = false;
-  if (license === 'CC0') {
-    try {
-      const licenseUrl = new URL(plainText(metadata.LicenseUrl?.value));
-      cc0License = ['https:', 'http:'].includes(licenseUrl.protocol)
-        && licenseUrl.hostname === 'creativecommons.org'
-        && !licenseUrl.username && !licenseUrl.password && !licenseUrl.port
-        && /^\/publicdomain\/zero\/1\.0(?:\/|$)/.test(licenseUrl.pathname);
-    } catch { cc0License = false; }
-  }
-  const publicDomain = license === 'Public domain' && plainText(metadata.Copyrighted?.value).toLowerCase() === 'false';
-  const attribution = plainText(metadata.AttributionRequired?.value).toLowerCase();
-  const nonFree = plainText(metadata.NonFree?.value).toLowerCase();
-  return (cc0License || publicDomain)
-    && ['', 'false', '0'].includes(attribution)
-    && ['', 'false', '0'].includes(nonFree)
-    && !plainText(metadata.Restrictions?.value)
-    && ['image/jpeg', 'image/png', 'image/webp'].includes(info.mime)
-    && info.width >= 800;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(info.mime) || !(info.width >= 800)) return null;
+  if (!['', 'false', '0'].includes(plainText(metadata.NonFree?.value).toLowerCase())) return null;
+  if (plainText(metadata.Restrictions?.value)) return null;
+  const grant = licenseGrant(plainText(metadata.LicenseUrl?.value));
+  if (grant) return grant;
+  const publicDomain = plainText(metadata.LicenseShortName?.value) === 'Public domain'
+    && plainText(metadata.Copyrighted?.value).toLowerCase() === 'false';
+  return publicDomain ? { attribution: false } : null;
 }
 
 export function photoMatches(page, info, query) {
@@ -251,8 +261,10 @@ export function photoMatches(page, info, query) {
   if (/watermark|ai[ -]generated|artificial intelligence|stable diffusion|midjourney|dall[ -]?e|computer[ -]generated|screenshot|\blogos?\b|\bdiagrams?\b|illustration|\bpaintings?\b|\bdrawings?\b|\bmaps?\b/i.test(context)) return false;
   const words = (value) => value.toLowerCase().match(/[a-z]{3,}/g) ?? [];
   const terms = [...new Set(words(query))];
-  const titleTerms = new Set(words(title));
-  return terms.length > 0 && terms.filter((term) => titleTerms.has(term)).length >= Math.ceil(terms.length * 2 / 3);
+  // The file title alone is often terse, so the description counts as subject
+  // evidence too, and half the query terms is enough to call it a match.
+  const subjectTerms = new Set([...words(title), ...words(description)]);
+  return terms.length > 0 && terms.filter((term) => subjectTerms.has(term)).length >= Math.max(1, Math.ceil(terms.length / 2));
 }
 
 export function imageContentType(bytes) {
@@ -260,6 +272,21 @@ export function imageContentType(bytes) {
   if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
   if (bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
   throw new Error('Image has unsupported file signature');
+}
+
+const CREATOR_LIMIT = 60;
+
+export function imageCredit(creator, license) {
+  const name = normalize(creator) || 'अज्ञात';
+  const clamped = characterCount(name) > CREATOR_LIMIT ? `${Array.from(name).slice(0, CREATOR_LIMIT - 1).join('')}…` : name;
+  return `${clamped} / ${license || 'Creative Commons'}, विकिमीडिया कॉमन्स`;
+}
+
+export function imageNotice(image) {
+  const base = 'चित्र: प्रतीकात्मक तस्वीर।';
+  if (!image?.attribution) return base;
+  const notice = `${base} साभार: ${image.attribution}`;
+  return characterCount(notice) <= IMAGE_NOTICE_BUDGET ? notice : `${Array.from(notice).slice(0, IMAGE_NOTICE_BUDGET - 1).join('')}…`;
 }
 
 export async function findImage(query, fallbackQueries = []) {
@@ -279,22 +306,27 @@ export async function findImage(query, fallbackQueries = []) {
     candidates += pages.length;
     for (const page of pages) {
       const info = page.imageinfo?.[0];
-      if (!info || !eligibleImage(info) || !photoMatches(page, info, searchQuery)) continue;
+      if (!info) continue;
+      const grant = eligibleImage(info);
+      if (!grant || !photoMatches(page, info, searchQuery)) continue;
+      const license = plainText(info.extmetadata?.LicenseShortName?.value);
+      const creator = plainText(info.extmetadata?.Artist?.value);
+      const attribution = grant.attribution ? imageCredit(creator, license) : '';
       const download = safeUrl(info.thumburl ?? info.url, IMAGE_DOMAINS).href;
       return {
         kind: 'real-photo', title: page.title, download, pageUrl: safeUrl(info.descriptionurl, ['commons.wikimedia.org']).href,
-        license: plainText(info.extmetadata.LicenseShortName.value),
-        creator: plainText(info.extmetadata.Artist?.value),
-        licenseUrl: plainText(info.extmetadata.LicenseUrl?.value),
-        caption: 'प्रतीकात्मक तस्वीर', searchQuery,
+        license, creator, attribution,
+        licenseUrl: plainText(info.extmetadata?.LicenseUrl?.value),
+        caption: attribution ? `प्रतीकात्मक तस्वीर — ${attribution}` : 'प्रतीकात्मक तस्वीर',
+        searchQuery,
       };
     }
   }
-  throw new Error(`No suitable CC0/public-domain image after ${queries.length} search(es), ${candidates} candidate(s); review or broaden the image queries`);
+  throw new Error(`No reusable CC0/public-domain/CC BY/CC BY-SA image after ${queries.length} search(es), ${candidates} candidate(s); review or broaden the image queries`);
 }
 
 export function portableText(article) {
-  return [...article.blocks, ...(article.image ? [{ type: 'paragraph', text: article.image.kind === 'headline-card' ? HEADLINE_CARD_NOTICE : 'चित्र: प्रतीकात्मक तस्वीर।' }] : [])].map((block, index) => ({
+  return [...article.blocks, ...(article.image ? [{ type: 'paragraph', text: imageNotice(article.image) }] : [])].map((block, index) => ({
     _type: 'block', _key: `block-${index}`, style: block.type === 'heading' ? 'h3' : 'normal', markDefs: [],
     ...(block.type === 'bullet' ? { listItem: 'bullet', level: 1 } : {}),
     children: [{ _type: 'span', _key: `span-${index}`, marks: [], text: block.text }],
