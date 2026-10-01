@@ -102,8 +102,9 @@ of exactly one billable/quota-counted request. It also fetches source articles a
 Commons image metadata. Dry-run consumes API quota but uploads no assets and creates
 no posts. If no suitable supported story or image exists, it fails rather than inventing one.
 
-If the response has the wrong paragraph/subheading structure, the runner prints the
-actual counts and allows **one structural correction request per category**. This
+If the response has malformed block objects or the wrong paragraph/subheading
+structure, the runner prints the offending block index and field requirement or
+the actual counts and allows **one structural correction request per category**. This
 consumes additional Gemini quota and uses the same request pacing. The corrected
 article must pass every original validation rule. It does not retry missing-story,
 length, evidence, image, or other validation failures as structural corrections.
