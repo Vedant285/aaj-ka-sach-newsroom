@@ -102,33 +102,42 @@ of exactly one billable/quota-counted request. It also fetches source articles.
 Dry-run consumes API quota but uploads no assets and creates no posts. If no suitable
 supported story exists, it fails rather than inventing one.
 
-## Headline cards (default)
+## Real photo, otherwise no image
 
-Every validated article gets an original 1200 x 630 PNG with आज का सच branding,
-the full Hindi headline, category, location and IST run date. Text is rendered with
-the bundled Noto Sans Devanagari font, not an AI image generator. No extra Gemini
-request, Commons search, source-photo download, or image API key is needed.
+The newsroom uses an optional licensed representative real photo. It never calls
+an AI image API, renders headline cards, or adds a title/date/branding overlay.
+If no suitable photo is found or its download fails, the article continues without
+`mainImage`, an asset upload, or an image notice. Missing images are warnings, not
+batch failures. Content, source, date, duplication and publication checks still apply.
 
-Download the Actions artifact and extract it to preview `headline-card-*.png`
-alongside `report.json`, `report.md` and `documents.json`. The report includes a
-relative preview link. Cards are labelled समाचार सार, not actual event photographs;
-the article body receives the same distinction. Headlines wrap and shrink to fit;
-unrenderable text fails safely rather than being silently cropped.
+The original Gemini article response supplies up to three short subject queries;
+no extra Gemini call is needed. Commons searches retain the CC0/public-domain,
+minimum-width and restriction checks. CC0 requires an official CC0 licence URL;
+public-domain-labelled files require a false copyright flag. Mandatory attribution
+and non-free flags are rejected case-insensitively. Unknown licences are not accepted.
 
-Source photos are not automatically copied. Watermark absence is not treated as
-permission. A future approved-photo path must verify reuse rights and attribution;
-until then the original card is the safe default. Legacy Commons helpers remain
-available in code but are not used by the newsroom workflow.
+Candidate titles must match most subject-query words. Metadata mentioning obvious
+AI generation, illustrations, diagrams, screenshots, logos, maps or watermarks is
+rejected. These are conservative text-based filters, not visual verification:
+they may skip good photos or miss unsuitable ones. Review the downloaded photo
+and its licence/source page before publication. No watermark is removed, and the
+absence of a watermark is never taken as reuse permission. Publisher photos are
+not automatically copied from news articles.
 
-Publish uploads the exact PNG bytes generated during that run, after hash and PNG
-checks and only after all articles/cards validate. Dry-run never uploads. As before,
-a later publish run generates fresh articles/cards; it does not promote an earlier
-reviewed artifact. Review remains necessary; do not enable unattended publication
-merely because the card renderer works.
+Extract the Actions artifact to review `photo-*.jpg`, `photo-*.png` or `photo-*.webp`
+beside the report and documents. Reports show the source/creator/licence, a local
+preview when available, and actual `withImages`/`withoutImages` counts. Text-only
+articles have no photo preview. Photos are labelled representative in the article
+body, not inside the image; they are not claimed to show the reported event.
 
-The font and its OFL licence must be uploaded together from `scripts/newsroom/assets`.
-Install dependencies with the existing workflow's `npm ci --ignore-scripts` step;
-no workflow or secret changes are required. See [font provenance](./scripts/newsroom/assets/README.md).
+Photos are downloaded once before publication, checked for size/type/signature,
+and uploaded from those same bytes after a hash check. Sanity authentication or
+upload failures remain errors, not silent text-only fallbacks. Dry-run makes no
+Sanity writes. Publish still generates fresh articles; it does not promote an older
+reviewed artifact. Existing same-day published posts are verified, not modified.
+
+No new secret, paid API or workflow edit is required. Old headline-card/font files
+can remain; the runner no longer imports or uses them.
 
 If the response has malformed block objects, the wrong paragraph/subheading
 structure, or an out-of-range body length, the runner prints the offending block
@@ -251,10 +260,10 @@ Using `npm.cmd` avoids PowerShell execution-policy issues with `npm.ps1`.
   slugs/tags, source references, and exact evidence excerpts. Evidence proves text
   was supplied, not that every generated claim is correct. Review factual accuracy,
   positivity, originality, and image relevance yourself.
-- Render original headline cards without downloading publisher photos. Include a
-  news-summary label, preserve the complete headline, and check PNG hashes before
-  uploading. Cards do not establish factual accuracy; review the underlying article.
-- All required articles/images must pass before Sanity uploads. A single transaction
+- Use optional licensed representative photos without overlays, or publish text-only.
+  Review photo relevance and rights; metadata checks are not visual verification.
+  Never substitute an AI image or headline card when real-photo selection fails.
+- All required articles must pass before Sanity uploads; photos are optional. A single transaction
   uses `createIfNotExists`; uncertain writes are checked rather than blindly retried.
   Failed uploads can leave unused assets but not a partially published article batch.
 - Existing daily IDs, source reuse, headline duplicates, dates, images, bylines,
