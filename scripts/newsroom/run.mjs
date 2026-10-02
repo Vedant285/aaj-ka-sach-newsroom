@@ -5,8 +5,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
 import {
-  CATEGORIES, PLACE_CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, ArticleEvidenceError, GeminiResponseError, assert, batchPlan, characterCount, collectSources, dayInIndia, makeDocument,
-  IMAGE_DOMAINS, findImage, imageContentType, postIds, request, requestJson, similarTitle, validateArticles, verifyPosts,
+  CATEGORIES, PLACE_CATEGORIES, QuotaError, ArticleStructureError, ArticleLengthError, ArticleEvidenceError, ArticleValidationError, GeminiResponseError, assert, batchPlan, characterCount, collectSources, dayInIndia, makeDocument,
+  IMAGE_DOMAINS, findImage, imageContentType, postIds, request, requestJson, similarTitle, validateArticleCandidates, verifyPosts,
 } from './core.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -140,6 +140,46 @@ export async function generate(config, prompt, category, sources, alreadyUsed, c
   }
 }
 
+export async function generateValidatedCategory({ config, prompt, category, sources, alreadyUsed = [], used = new Set(), count = 2, beforeRequest = async () => {}, onWarning = async () => {} }) {
+  let articles = [];
+  let correctionRequest = null;
+  let requestedCount = count;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await beforeRequest();
+    let payload;
+    try {
+      payload = await generate(config, prompt, category, sources, [...alreadyUsed, ...articles.map((article) => article.title)], requestedCount, correctionRequest);
+    } catch (error) {
+      if (!(error instanceof GeminiResponseError)) throw error;
+      await onWarning(`${category}: ${error.message}${attempt < 2 ? ' Asking again, unchanged.' : ' No requests remain; retaining any validated articles.'}`);
+      continue;
+    }
+    if (Array.isArray(payload?.skipped) && payload.skipped.length) await onWarning(`${category}: model reported ${payload.skipped.length} skipped items`);
+    let result;
+    try {
+      result = validateArticleCandidates(payload, category, sources, used, requestedCount, articles);
+    } catch (error) {
+      if (!(error instanceof ArticleStructureError)) throw error;
+      await onWarning(error.message);
+      break;
+    }
+    articles = result.articles;
+    for (const failure of result.failures) await onWarning(`${category}: articles[${failure.index}]: ${failure.error.message}`);
+    const retryable = result.failures.filter(({ error }) => error instanceof ArticleStructureError || error instanceof ArticleLengthError || error instanceof ArticleEvidenceError || error instanceof ArticleValidationError);
+    if (!retryable.length || correctionRequest || attempt === 2) break;
+    const previousResponse = { articles: retryable.map(({ article }) => article), skipped: [] };
+    if (JSON.stringify(previousResponse).length > 40000) break;
+    correctionRequest = {
+      validationError: retryable.map(({ error }, index) => `articles[${index}]: ${error.message}`).join('\n'),
+      previousResponse,
+    };
+    requestedCount = retryable.length;
+    await onWarning(`${category}: retaining ${articles.length} validated article(s). Requesting one correction for ${requestedCount} failed article(s), including all reported length, language and evidence errors; this consumes another Gemini request.`);
+  }
+  if (articles.length < count) await onWarning(`${category}: accepted ${articles.length} of ${count} requested article(s); batch minimum is unchanged`);
+  return articles;
+}
+
 async function verifyHomepage(client, posts) {
   let last = 'Homepage has not refreshed';
   for (let attempt = 0; attempt < 6; attempt++) {
@@ -202,6 +242,9 @@ export async function main(args = process.argv.slice(2)) {
   const output = resolve(ROOT, 'newsroom-output', `${day}-${mode}-${Date.now()}`);
   await mkdir(output, { recursive: true });
   const report = { day, mode, requestedCount: plan.count, categories: plan.categories, status: 'started', articles: [], warnings: [], verification: {} };
+  // The dispatch form always sends a category (the input is required), so state what the run
+  // will actually cover: a 20-article run ignores that choice and takes every category.
+  console.log(plan.count === 1 ? `Plan: 1 article from ${plan.categories[0]}.` : `Plan: ${plan.count} articles, ${plan.perCategory} from each of ${plan.categories.join(', ')}. The category input applies only to a 1-article run.`);
   const client = sanityClient(config);
   const preparedImages = new Map();
   const ids = postIds(day, plan);
@@ -254,48 +297,19 @@ export async function main(args = process.argv.slice(2)) {
         const sources = [...new Map([...local, ...fallback].map((source) => [source.id, source])).values()].slice(0, 8);
         assert(sources.length >= plan.perCategory, `${category}: insufficient recent, readable sources (${local.length} on-topic${PLACE_CATEGORIES.has(category) ? `, ${fallback.length} general-news fallback` : '; topic categories take no general-news fallback'})`);
         console.log(`Generating and validating: ${category}`);
-        let articles;
-        let correctionRequest = null;
-        let corrected = false;
-        // Three requests at worst, but still only ONE content correction — that is what
-        // editorial-prompt.md promises the model. A response that arrived malformed
-        // carried no correction, so re-asking it unchanged must not spend that budget:
-        // a sports article that only needed lengthening was lost when the correction
-        // came back as unparseable JSON and the category had no attempts left.
-        for (let attempt = 0; attempt < 3; attempt++) {
-          await sleep(Math.max(0, config.interval - (Date.now() - lastRequest)));
-          lastRequest = Date.now();
-          let payload;
-          try {
-            payload = await generate(config, prompt, category, sources, alreadyUsed, plan.perCategory, correctionRequest);
-          } catch (error) {
-            if (!(error instanceof GeminiResponseError) || attempt === 2) throw error;
-            const warning = `${category}: ${error.message} Asking again, unchanged.`;
+        const articles = await generateValidatedCategory({
+          config, prompt, category, sources, alreadyUsed, used, count: plan.perCategory,
+          beforeRequest: async () => {
+            await sleep(Math.max(0, config.interval - (Date.now() - lastRequest)));
+            lastRequest = Date.now();
+          },
+          onWarning: async (warning) => {
             report.warnings.push(warning);
             console.warn(warning);
             await writeReport();
-            continue;
-          }
-          if (Array.isArray(payload?.skipped) && payload.skipped.length) report.warnings.push(`${category}: model reported ${payload.skipped.length} skipped items`);
-          try {
-            articles = validateArticles(payload, category, sources, used, plan.perCategory);
-            if (articles.length < plan.perCategory) {
-              const warning = `${category}: accepted ${articles.length} of ${plan.perCategory} requested article(s); batch minimum is unchanged`;
-              report.warnings.push(warning);
-              console.warn(warning);
-            }
-            break;
-          } catch (error) {
-            if (!(error instanceof ArticleStructureError || error instanceof ArticleLengthError || error instanceof ArticleEvidenceError) || corrected || JSON.stringify(payload).length > 40000) throw error;
-            corrected = true;
-            const warning = `${error.message} Requesting one correction; this consumes another Gemini request.`;
-            report.warnings.push(warning);
-            console.warn(warning);
-            correctionRequest = { validationError: error.message, previousResponse: payload };
-            await writeReport();
-          }
-        }
-        assert(articles, `${category}: article validation did not complete`);
+          },
+        });
+        assert(articles.length, `${category}: no articles passed validation`);
         // Drop near-duplicates of anything already published or generated earlier in this
         // batch, rather than failing the category: one repeated story should not also cost
         // the fresh article next to it.
@@ -380,7 +394,7 @@ export async function main(args = process.argv.slice(2)) {
     report.status = 'published';
     await writeReport();
     report.verification.homepage = await verifyHomepage(client, published);
-    console.log(`Published and verified ${plan.count} article(s).`);
+    console.log(`Published and verified ${published.length} of ${plan.count} article(s).`);
   } catch (error) {
     report.status = report.status === 'published' || report.status === 'already-published' ? 'published-verification-failed' : 'failed';
     report.error = error.message;

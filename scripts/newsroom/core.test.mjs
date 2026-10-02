@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  ArticleEvidenceError, ArticleLengthError, CATEGORIES, batchPlan, characterCount, creditFreeLicense, eligibleImage,
-  interleaveByRank, makeDocument, parseIndex, photoScore, portableText, similarTitle, validateArticles, verifyPosts,
+  ArticleEvidenceError, ArticleLengthError, ArticleStructureError, ArticleValidationError, CATEGORIES, batchPlan, characterCount, creditFreeLicense, eligibleImage,
+  interleaveByRank, makeDocument, parseIndex, photoScore, portableText, postIds, similarTitle, validateArticleCandidates, validateArticles, verifyPosts,
 } from './core.mjs';
 
 // Offline only: no network, no credentials. Run with `npm test`.
@@ -95,6 +95,19 @@ test('a full batch still verifies, and a batch below the minimum is rejected', (
   assert.equal(plan.minimum, 12);
   assert.equal(verifyPosts(buildBatch(), '2026-10-01', plan).shortfall, 0);
   assert.throws(() => verifyPosts(buildBatch().slice(0, 11), '2026-10-01', plan), /12-20 distinct batch post/);
+});
+
+test('a 20-article run takes two from every category, whatever category was picked', () => {
+  // The dispatch form always sends a category, because the input is required. Only a
+  // one-article run may use it: the full batch is two stories from each of the ten.
+  for (const picked of CATEGORIES) {
+    const ids = postIds('2026-10-02', batchPlan(20, picked));
+    assert.equal(ids.length, 20);
+    for (const category of CATEGORIES) {
+      assert.deepEqual(ids.filter((id) => id.startsWith(`newsroom-2026-10-02-${category}-`)), [`newsroom-2026-10-02-${category}-1`, `newsroom-2026-10-02-${category}-2`]);
+    }
+  }
+  assert.deepEqual(postIds('2026-10-02', batchPlan(1, 'sports')), ['newsroom-test-2026-10-02-sports-1']);
 });
 
 test('published documents carry no caption, no image line and no outbound links', () => {
@@ -205,6 +218,73 @@ const payloadFor = (quote) => ({
 const SOURCE = [{ id: SOURCE_ID, url: 'https://www.amarujala.com/a', title: 'स', text: SOURCE_TEXT }];
 const validatePayload = (payload) => validateArticles(payload, 'up', SOURCE, [], 1);
 const validate = (quote) => validatePayload(payloadFor(quote));
+
+test('one supported article is accepted when two were requested', () => {
+  assert.equal(validateArticles(payloadFor(QUOTE), 'up', SOURCE, [], 2).length, 1);
+  assert.throws(() => validateArticles({ articles: [] }, 'up', SOURCE), /need 1-2/);
+  assert.throws(() => validateArticles({ articles: Array(3).fill(payloadFor(QUOTE).articles[0]) }, 'up', SOURCE), /need 1-2/);
+});
+
+test('length, Hindi and evidence errors are reported together', () => {
+  const payload = payloadFor('This is not a verbatim quote from the source text.');
+  payload.articles[0].title += ' NASA';
+  payload.articles[0].blocks.forEach((block) => { block.text = 'छोटा पाठ'; });
+  assert.throws(() => validatePayload(payload), (error) => {
+    assert.ok(error instanceof ArticleValidationError);
+    assert.ok(error.errors.some((item) => item instanceof ArticleLengthError));
+    assert.ok(error.errors.some((item) => item instanceof ArticleStructureError));
+    assert.ok(error.errors.some((item) => item instanceof ArticleEvidenceError));
+    return true;
+  });
+});
+
+test('a failed first article cannot discard a valid sibling or consume its source', () => {
+  const invalid = payloadFor('This is not a verbatim quote from the source text.').articles[0];
+  const valid = payloadFor(QUOTE).articles[0];
+  const used = new Set();
+  const result = validateArticleCandidates({ articles: [invalid, valid] }, 'up', SOURCE, used);
+  assert.equal(result.articles.length, 1);
+  assert.deepEqual(result.articles[0].evidence, valid.evidence);
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.failures[0].index, 0);
+  assert.equal(used.size, 0);
+});
+
+test('corrections cannot reuse accepted titles, slugs or sources', () => {
+  const valid = payloadFor(QUOTE).articles[0];
+  const retained = validatePayload({ articles: [valid] });
+  const otherSource = { ...SOURCE[0], id: 'other-source' };
+  for (const conflict of ['title', 'slug', 'sourceIds']) {
+    const candidate = { ...structuredClone(valid), title: 'खेल प्रतियोगिता में खिलाड़ियों ने शानदार जीत दर्ज की', slug: 'sports-victory', sourceIds: [otherSource.id], evidence: [{ sourceId: otherSource.id, quote: QUOTE }] };
+    candidate[conflict] = valid[conflict];
+    if (conflict === 'sourceIds') candidate.evidence = valid.evidence;
+    const result = validateArticleCandidates({ articles: [candidate] }, 'up', [...SOURCE, otherSource], [], 1, retained);
+    assert.equal(result.articles.length, 1);
+    assert.equal(result.failures.length, 1);
+    assert.equal(result.articles[0].slug, valid.slug);
+  }
+});
+
+test('malformed or overfull candidate envelopes are rejected', () => {
+  for (const payload of [null, {}, { articles: 'bad' }, { articles: [1, 2, 3] }]) {
+    assert.throws(() => validateArticleCandidates(payload, 'up', SOURCE), ArticleStructureError);
+  }
+  assert.deepEqual(validateArticleCandidates({ articles: [] }, 'up', SOURCE), { articles: [], failures: [] });
+});
+
+test('the 1500-2900 character boundaries remain strict', () => {
+  for (const length of [1480, 1499, 1500, 2900, 2901, 3039]) {
+    const payload = payloadFor(QUOTE);
+    payload.articles[0].blocks = [
+      { type: 'paragraph', text: 'क'.repeat(length - 8) },
+      { type: 'heading', text: 'क' },
+      ...Array.from({ length: 3 }, () => ({ type: 'paragraph', text: 'क' })),
+    ];
+    assert.equal(characterCount(payload.articles[0].blocks.map((block) => block.text).join('\n')), length);
+    if (length < 1500 || length > 2900) assert.throws(() => validatePayload(payload), ArticleLengthError);
+    else assert.equal(validatePayload(payload).length, 1);
+  }
+});
 
 test('evidence must be a real quote, but re-wrapped whitespace is still a real quote', () => {
   assert.equal(validate(QUOTE)[0].sourceIds[0], SOURCE_ID);

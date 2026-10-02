@@ -47,9 +47,23 @@ export function canonicalSource(value) {
 }
 
 export class QuotaError extends Error {}
-export class ArticleStructureError extends Error {}
-export class ArticleLengthError extends Error {}
-export class ArticleEvidenceError extends Error {}
+// Something wrong with one article, not with the response it arrived in. validateArticles
+// keeps the response's other article, and the runner spends its one correction on this one.
+export class ArticleError extends Error {}
+export class ArticleStructureError extends ArticleError {}
+export class ArticleLengthError extends ArticleError {}
+export class ArticleEvidenceError extends ArticleError {}
+export class ArticleValidationError extends ArticleError {
+  constructor(errors) {
+    super(errors.map((error) => error.message).join('\n'));
+    this.errors = errors;
+  }
+}
+// Latin letters, outlet credits or a byline in the published text.
+export class ArticleTextError extends ArticleError {}
+// A story that is already taken: its headline repeats one published or accepted earlier,
+// or its source already backs another article. Fixing it means writing a different story.
+export class ArticleRepeatError extends ArticleError {}
 // A response that never arrived in usable form. Distinct from the article errors above:
 // there is nothing to correct, so the runner re-asks the same question instead.
 export class GeminiResponseError extends Error {}
@@ -92,7 +106,9 @@ export async function request(url, { domains, label, retries = 2, maxBytes = 3_0
         await sleep(Math.min(120_000, Math.max(retryAfter * 1000, 15_000 * 2 ** attempt)));
         continue;
       }
-      throw new Error(`${label}: HTTP ${response.status}`);
+      // Keep the status and the API's own reason. "HTTP 400" alone cannot tell a request
+      // field the API rejected from a bad key, and the runner needs the status to decide.
+      throw Object.assign(new Error(`${label}: HTTP ${response.status}${errorReason(bytes)}`), { status: response.status });
     } catch (error) {
       if (error instanceof QuotaError) throw error;
       if (error instanceof TypeError || error.name === 'TimeoutError') {
@@ -102,6 +118,16 @@ export async function request(url, { domains, label, retries = 2, maxBytes = 3_0
       throw error;
     }
   }
+}
+
+// The explanation inside a JSON error body: Gemini's error.message, Sanity's
+// error.description. A publisher's HTML error page yields nothing.
+function errorReason(bytes) {
+  try {
+    const body = JSON.parse(bytes.toString('utf8'));
+    const reason = [body?.error?.message, body?.error?.description, body?.error, body?.message].find((value) => typeof value === 'string' && value.trim());
+    return reason ? ` (${Array.from(normalize(reason)).slice(0, 300).join('')})` : '';
+  } catch { return ''; }
 }
 
 export async function requestJson(url, options) {
@@ -314,6 +340,7 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
     }
     const body = article.blocks.map((block) => block.text).join('\n');
     const bodyCharacters = characterCount(body);
+    const errors = [];
     if (bodyCharacters < 1500 || bodyCharacters > 2900) {
       // Give the model arithmetic, not a target range. Two runs were lost to bodies of
       // 1283 and 1403 characters: "revise toward 2100-2500" never told a weak model how
@@ -323,11 +350,11 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
       const remedy = bodyCharacters < 1500
         ? `It is ${1500 - bodyCharacters} characters below the floor and ${2100 - bodyCharacters} below target. Your ${paragraphs} paragraphs average ${perParagraph} characters each and must be 410-470 each. Expand EVERY paragraph using detail already present in the supplied sources; do not add paragraphs, repeat sentences, or invent facts.`
         : `It is ${bodyCharacters - 2900} characters over. Cut repetition and secondary detail from the longest paragraphs and keep all ${paragraphs} of them.`;
-      throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters} Unicode characters). The body, headings included, must be 1500-2900 characters. ${remedy} Leave every evidence quote exactly as it is.`);
+      errors.push(new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters} Unicode characters). The body, headings included, must be 1500-2900 characters. ${remedy} Preserve evidence quotes that already match their source; repair any evidence errors listed separately.`));
     }
     const visible = [article.title, article.district, ...article.tags, body].join(' ');
     if (/[a-z]/i.test(visible) || !/[\u0900-\u097f]/.test(visible)) {
-      throw new ArticleStructureError(`${category}: article must use Devanagari, not Latin text. Rewrite Latin words in title, district, tags and block text in Devanagari. Keep slug, sourceIds, imageQueries and exact evidence quotes unchanged.`);
+      errors.push(new ArticleStructureError(`${category}: article must use Devanagari, not Latin text. Rewrite Latin words in title, district, tags and block text in Devanagari. Keep slug, sourceIds, imageQueries and valid evidence quotes unchanged.`));
     }
     assert(!/एजेंसी|हमारे संवाददाता|पीटीआई|एएनआई|अमर उजाला|दैनिक जागरण|दैनिक भास्कर|भास्कर|एबीपी|बीबीसी|एनडीटीवी/.test(visible), `${category}: outlet credit or byline in copy`);
     // Retryable and specific. "invalid source references" told us nothing when a model that
@@ -344,22 +371,24 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
         throw new ArticleStructureError(`${category}: sourceId ${sourceId} is not one of the supplied source records. Use the IDs exactly as supplied; do not invent or abbreviate them.`);
       }
       assert(!used.has(sourceId), `${category}: source ${sourceId} was already used by another article`);
-      const proof = article.evidence.find((item) => item.sourceId === sourceId);
+      const proof = article.evidence.find((item) => item?.sourceId === sourceId);
       // Match on the normalized quote. extractArticle already collapsed the source's
       // whitespace, so a model that re-wraps or double-spaces its excerpt is quoting
       // correctly and must not lose the article over it. The substring match itself
       // stays exact — that is what proves the article is grounded in the source.
       const quote = normalize(typeof proof?.quote === 'string' ? proof.quote : '');
       if (!(characterCount(quote) >= 30 && characterCount(quote) <= 180 && sourceMap.get(sourceId).text.includes(quote))) {
-        throw new ArticleEvidenceError(`${category}: evidence for source ${sourceId} is not an exact quote from that source. Copy 30-180 characters straight out of that source's supplied text, unchanged.`);
+        errors.push(new ArticleEvidenceError(`${category}: evidence for source ${sourceId} is not an exact quote from that source. Copy 30-180 characters straight out of that source's supplied text, unchanged.`));
       }
       used.add(sourceId);
     }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new ArticleValidationError(errors);
     return {
       title: article.title, slug: article.slug, district: article.district, tags: article.tags,
       imageQueries: Array.isArray(article.imageQueries) ? [...new Set(article.imageQueries.filter((query) => typeof query === 'string' && /^[a-zA-Z][a-zA-Z -]{2,59}$/.test(query) && query.trim().split(/\s+/).length <= 3).map(normalize))].slice(0, 3) : [],
       blocks: article.blocks.map(({ type, text }) => ({ type, text })), category,
-      sourceIds: article.sourceIds, evidence: article.evidence.filter((item) => article.sourceIds.includes(item.sourceId)).map(({ sourceId, quote }) => ({ sourceId, quote })),
+      sourceIds: article.sourceIds, evidence: article.evidence.filter((item) => article.sourceIds.includes(item?.sourceId)).map(({ sourceId, quote }) => ({ sourceId, quote })),
       sources: article.sourceIds.map((sourceId) => {
         const { text: omitted, ...metadata } = sourceMap.get(sourceId);
         void omitted;
@@ -367,6 +396,23 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
       }),
     };
   });
+}
+
+export function validateArticleCandidates(payload, category, sources, alreadyUsed = new Set(), count = 2, retained = []) {
+  assert([1, 2].includes(count), 'Expected one or two articles per category');
+  if (!Array.isArray(payload?.articles) || payload.articles.length > count) {
+    throw new ArticleStructureError(`${category}: expected an articles array with at most ${count} items`);
+  }
+  let articles = [...retained];
+  const failures = [];
+  for (const [index, article] of payload.articles.entries()) {
+    try {
+      articles = validateArticles({ articles: [...articles, article] }, category, sources, alreadyUsed, 2);
+    } catch (error) {
+      failures.push({ index, article, error });
+    }
+  }
+  return { articles, failures };
 }
 
 // Licences we accept: CC0 and the public-domain mark only. The website has nowhere
