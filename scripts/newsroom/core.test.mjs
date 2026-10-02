@@ -62,7 +62,7 @@ const article = (category) => ({
 
 // Mirrors the per-category slot counter in run.mjs, which is the whole point of the test.
 function buildBatch(perCategory = {}) {
-  const plan = batchPlan(20);
+  const plan = batchPlan(18);
   const slots = new Map();
   // Pinned to the batch day: verifyPosts requires publishedAt to fall on that IST day, so
   // a live clock passed only on 1 October and failed every day after.
@@ -77,32 +77,50 @@ function buildBatch(perCategory = {}) {
 }
 
 test('a short category does not shift every later article onto the wrong id', () => {
-  const plan = batchPlan(20);
+  const plan = batchPlan(18);
   const documents = buildBatch({ delhi: 1, lifestyle: 1 });
-  assert.equal(documents.length, 18);
+  assert.equal(documents.length, 16);
   const ids = documents.map((document) => document._id);
   assert.deepEqual(ids.filter((id) => id.includes('-delhi-')), ['newsroom-2026-10-01-delhi-1']);
   assert.deepEqual(ids.filter((id) => id.includes('-sports-')), ['newsroom-2026-10-01-sports-1', 'newsroom-2026-10-01-sports-2']);
   assert.equal(new Set(ids).size, ids.length);
   const verification = verifyPosts(documents, '2026-10-01', plan);
-  assert.equal(verification.count, 18);
+  assert.equal(verification.count, 16);
   assert.equal(verification.shortfall, 2);
   assert.equal(verification.perCategory.delhi, 1);
 });
 
 test('a full batch still verifies, and a batch below the minimum is rejected', () => {
-  const plan = batchPlan(20);
+  const plan = batchPlan(18);
   assert.equal(plan.minimum, 12);
   assert.equal(verifyPosts(buildBatch(), '2026-10-01', plan).shortfall, 0);
-  assert.throws(() => verifyPosts(buildBatch().slice(0, 11), '2026-10-01', plan), /12-20 distinct batch post/);
+  assert.throws(() => verifyPosts(buildBatch().slice(0, 11), '2026-10-01', plan), /12-18 distinct batch post/);
 });
 
-test('a 20-article run takes two from every category, whatever category was picked', () => {
+test('daily batches cover nine categories and exclude mystery', () => {
+  assert.deepEqual(CATEGORIES, ['up', 'uk', 'delhi', 'world', 'dharma', 'business', 'sports', 'others', 'lifestyle']);
+  assert.equal(batchPlan().count, 18);
+  assert.equal(batchPlan().minimum, 12);
+  assert.equal(postIds('2026-10-02').length, 18);
+  assert.ok(postIds('2026-10-02').every((id) => !id.includes('-mystery-')));
+  assert.deepEqual(Object.keys(feeds).sort(), [...CATEGORIES].sort());
+  assert.throws(() => batchPlan(20), /Article count must be 1 or 18/);
+  assert.throws(() => batchPlan(1, 'mystery'), /Unknown newsroom category/);
+});
+
+test('manual and scheduled workflows use the 18-article configuration', async () => {
+  const workflow = await readFile(new URL('../../.github/workflows/newsroom.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /options:\s*\n\s*- '1'\s*\n\s*- '18'/);
+  assert.match(workflow, /inputs\.article_count \|\| '18'/);
+  assert.doesNotMatch(workflow, /- mystery\b|article count is 20|Choose 20/);
+});
+
+test('an 18-article run takes two from every category, whatever category was picked', () => {
   // The dispatch form always sends a category, because the input is required. Only a
-  // one-article run may use it: the full batch is two stories from each of the ten.
+  // one-article run may use it: the full batch is two stories from each of the nine.
   for (const picked of CATEGORIES) {
-    const ids = postIds('2026-10-02', batchPlan(20, picked));
-    assert.equal(ids.length, 20);
+    const ids = postIds('2026-10-02', batchPlan(18, picked));
+    assert.equal(ids.length, 18);
     for (const category of CATEGORIES) {
       assert.deepEqual(ids.filter((id) => id.startsWith(`newsroom-2026-10-02-${category}-`)), [`newsroom-2026-10-02-${category}-1`, `newsroom-2026-10-02-${category}-2`]);
     }
@@ -111,7 +129,7 @@ test('a 20-article run takes two from every category, whatever category was pick
 });
 
 test('published documents carry no caption, no image line and no outbound links', () => {
-  const plan = batchPlan(20);
+  const plan = batchPlan(18);
   const withImage = makeDocument({ ...article('up'), image: { kind: 'real-photo', license: 'CC0' } }, 0, '2026-10-01', new Date(), 'asset-1', plan, 1);
   assert.ok(!('caption' in withImage.mainImage));
   assert.equal(withImage.mainImage.alt, withImage.title);
@@ -131,7 +149,7 @@ test('every source and evidence entry carries a unique _key', () => {
   // alert in place of any array of objects whose items have no _key.
   const sources = ['a', 'b'].map((id) => ({ id, url: `https://www.bhaskar.com/${id}`, title: 'स', publishedAt: null }));
   const evidence = [{ sourceId: 'a', quote: 'पहला' }, { sourceId: 'b', quote: 'दूसरा' }];
-  const { newsroom } = makeDocument({ ...article('up'), sources, evidence }, 0, '2026-10-01', new Date(), 'asset-1', batchPlan(20), 1);
+  const { newsroom } = makeDocument({ ...article('up'), sources, evidence }, 0, '2026-10-01', new Date(), 'asset-1', batchPlan(18), 1);
   for (const list of [newsroom.sources, newsroom.evidence]) {
     assert.equal(list.length, 2);
     assert.ok(list.every((item) => typeof item._key === 'string' && item._key));

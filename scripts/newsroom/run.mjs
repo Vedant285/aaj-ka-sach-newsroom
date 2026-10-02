@@ -230,7 +230,7 @@ export async function main(args = process.argv.slice(2)) {
   const plan = config.plan;
   const mode = args[0] === '--publish' ? 'publish' : 'dry-run';
   const feeds = JSON.parse(await readFile(new URL('./feeds.json', import.meta.url), 'utf8'));
-  assert(CATEGORIES.every((category) => Array.isArray(feeds[category]) && feeds[category].length), 'Feed configuration must cover all ten categories');
+  assert(CATEGORIES.every((category) => Array.isArray(feeds[category]) && feeds[category].length), 'Feed configuration must cover all active categories');
   requireGemini(config);
   if (args[0] === '--check') {
     console.log(`Offline configuration valid: ${plan.count} article(s), categories ${plan.categories.join(', ')}. Sanity publish token: ${config.token ? 'configured' : 'not configured (dry-run only)'}. Credentials and quotas were NOT tested.`);
@@ -243,7 +243,7 @@ export async function main(args = process.argv.slice(2)) {
   await mkdir(output, { recursive: true });
   const report = { day, mode, requestedCount: plan.count, categories: plan.categories, status: 'started', articles: [], warnings: [], verification: {} };
   // The dispatch form always sends a category (the input is required), so state what the run
-  // will actually cover: a 20-article run ignores that choice and takes every category.
+  // will actually cover: an 18-article run ignores that choice and takes every category.
   console.log(plan.count === 1 ? `Plan: 1 article from ${plan.categories[0]}.` : `Plan: ${plan.count} articles, ${plan.perCategory} from each of ${plan.categories.join(', ')}. The category input applies only to a 1-article run.`);
   const client = sanityClient(config);
   const preparedImages = new Map();
@@ -292,7 +292,7 @@ export async function main(args = process.argv.slice(2)) {
         // therefore spends a Gemini request to be refused, and the refusal arrives as a
         // malformed article rather than a clean skip.
         const fallback = local.length >= plan.perCategory + 2 || !PLACE_CATEGORIES.has(category) ? []
-          : [...(pools.others ?? []), ...(pools.world ?? []), ...(pools.mystery ?? [])].filter((source) => !used.has(source.id));
+          : [...(pools.others ?? []), ...(pools.world ?? [])].filter((source) => !used.has(source.id));
         if (fallback.length) report.warnings.push(`${category}: only ${local.length} on-topic source(s); topped up from general news`);
         const sources = [...new Map([...local, ...fallback].map((source) => [source.id, source])).values()].slice(0, 8);
         assert(sources.length >= plan.perCategory, `${category}: insufficient recent, readable sources (${local.length} on-topic${PLACE_CATEGORIES.has(category) ? `, ${fallback.length} general-news fallback` : '; topic categories take no general-news fallback'})`);

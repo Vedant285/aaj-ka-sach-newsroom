@@ -3,7 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { load } from 'cheerio';
 import { XMLParser } from 'fast-xml-parser';
 
-export const CATEGORIES = ['up', 'uk', 'delhi', 'world', 'dharma', 'business', 'sports', 'others', 'mystery', 'lifestyle'];
+export const CATEGORIES = ['up', 'uk', 'delhi', 'world', 'dharma', 'business', 'sports', 'others', 'lifestyle'];
 // Place categories only. editorial-prompt.md accepts a national story with real bearing on
 // up/uk/delhi, but rules general news out as a substitute under a topic category, so only
 // these three may have a dry local feed topped up from the general-news pools.
@@ -12,12 +12,12 @@ const SOURCE_DOMAINS = ['amarujala.com', 'bhaskar.com', 'abplive.com', 'bbc.co.u
 export const IMAGE_DOMAINS = ['upload.wikimedia.org', 'thumb.wikimedia.org'];
 export const hash = (text) => createHash('sha256').update(text).digest('hex').slice(0, 24);
 export const dayInIndia = (date = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
-export function batchPlan(count = 20, category = 'up') {
-  assert([1, 20].includes(count), 'Article count must be 1 or 20');
+export function batchPlan(count = 18, category = 'up') {
+  assert([1, 18].includes(count), 'Article count must be 1 or 18');
   assert(CATEGORIES.includes(category), 'Unknown newsroom category');
-  // minimum is what the batch must reach to be worth publishing. Ten categories each
-  // depend on live third-party feeds, so demanding all 20 means one dry feed throws
-  // away nineteen good articles.
+  // minimum is what the batch must reach to be worth publishing. Nine categories each
+  // depend on live third-party feeds, so demanding all 18 means one dry feed throws
+  // away seventeen good articles.
   return { count, minimum: count === 1 ? 1 : 12, categories: count === 1 ? [category] : CATEGORIES, perCategory: count === 1 ? 1 : 2, prefix: count === 1 ? 'newsroom-test' : 'newsroom' };
 }
 export const postIds = (day, plan = batchPlan()) => plan.categories.flatMap((category) => Array.from({ length: plan.perCategory }, (_, index) => `${plan.prefix}-${day}-${category}-${index + 1}`));

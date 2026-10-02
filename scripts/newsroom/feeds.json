@@ -7,6 +7,5 @@
   "business": ["https://www.bhaskar.com/rss-v1--category-1051.xml", "https://www.abplive.com/business/feed"],
   "sports": ["https://www.bhaskar.com/rss-v1--category-1053.xml", "https://feeds.bbci.co.uk/sport/rss.xml"],
   "others": ["https://www.bhaskar.com/rss-v1--category-1061.xml", "https://www.abplive.com/news/feed"],
-  "mystery": ["https://www.sciencedaily.com/rss/space_time.xml", "https://www.sciencedaily.com/rss/strange_offbeat.xml", "https://www.abplive.com/gk/feed"],
   "lifestyle": ["https://www.abplive.com/lifestyle/feed", "https://www.abplive.com/photo-gallery/lifestyle/feed"]
 }
