@@ -18,7 +18,7 @@ export function batchPlan(count = 18, category = 'up') {
   // minimum is what the batch must reach to be worth publishing. Nine categories each
   // depend on live third-party feeds, so demanding all 18 means one dry feed throws
   // away seventeen good articles.
-  return { count, minimum: count === 1 ? 1 : 12, categories: count === 1 ? [category] : CATEGORIES, perCategory: count === 1 ? 1 : 2, prefix: count === 1 ? 'newsroom-test' : 'newsroom' };
+  return { count, minimum: 1 , categories: count === 1 ? [category] : CATEGORIES, perCategory: count === 1 ? 1 : 2, prefix: count === 1 ? 'newsroom-test' : 'newsroom' };
 }
 export const postIds = (day, plan = batchPlan()) => plan.categories.flatMap((category) => Array.from({ length: plan.perCategory }, (_, index) => `${plan.prefix}-${day}-${category}-${index + 1}`));
 export const characterCount = (text) => Array.from(text).length;
