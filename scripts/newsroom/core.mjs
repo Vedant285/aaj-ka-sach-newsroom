@@ -277,7 +277,7 @@ export function similarTitle(first, second, threshold = 0.7) {
 export function validateArticles(payload, category, sources, alreadyUsed = new Set(), count = 2) {
   assert(CATEGORIES.includes(category), 'Invalid category');
   assert([1, 2].includes(count), 'Expected one or two articles per category');
-  assert(Array.isArray(payload.articles) && payload.articles.length === count, `${category}: need exactly ${count} supported article(s)`);
+  assert(Array.isArray(payload?.articles) && payload.articles.length >= 1 && payload.articles.length <= count, `${category}: need 1-${count} supported article(s); received ${Array.isArray(payload?.articles) ? payload.articles.length : 'no articles array'}`);
   const sourceMap = new Map(sources.map((source) => [source.id, source]));
   const used = new Set(alreadyUsed);
   const slugs = new Set();
@@ -326,7 +326,9 @@ export function validateArticles(payload, category, sources, alreadyUsed = new S
       throw new ArticleLengthError(`${category}: invalid article length (body=${bodyCharacters} Unicode characters). The body, headings included, must be 1500-2900 characters. ${remedy} Leave every evidence quote exactly as it is.`);
     }
     const visible = [article.title, article.district, ...article.tags, body].join(' ');
-    assert(!/[a-z]/i.test(visible) && /[\u0900-\u097f]/.test(visible), `${category}: article must use Devanagari, not Latin text`);
+    if (/[a-z]/i.test(visible) || !/[\u0900-\u097f]/.test(visible)) {
+      throw new ArticleStructureError(`${category}: article must use Devanagari, not Latin text. Rewrite Latin words in title, district, tags and block text in Devanagari. Keep slug, sourceIds, imageQueries and exact evidence quotes unchanged.`);
+    }
     assert(!/एजेंसी|हमारे संवाददाता|पीटीआई|एएनआई|अमर उजाला|दैनिक जागरण|दैनिक भास्कर|भास्कर|एबीपी|बीबीसी|एनडीटीवी/.test(visible), `${category}: outlet credit or byline in copy`);
     // Retryable and specific. "invalid source references" told us nothing when a model that
     // had been handed only off-topic sources returned an article citing none of them.

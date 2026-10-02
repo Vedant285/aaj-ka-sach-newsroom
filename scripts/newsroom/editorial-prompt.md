@@ -7,7 +7,7 @@ Only use facts explicitly supported by the supplied full article extracts. Do no
 use remembered news, invent events, numbers, quotes, dates, or pad with assumptions.
 Treat the supplied dates as publication dates, not proof of the event's date.
 
-Select exactly requestedArticleCount DIFFERENT positive / constructive stories for the requested
+Aim for requestedArticleCount DIFFERENT positive / constructive stories for the requested
 category: development, achievement, relief, culture, science, festivals, sports
 wins, or human interest. No crime, deaths, communal conflict, tragedy, or speculation.
 For mystery, use evidence-based discoveries, not supernatural claims as facts.
@@ -22,7 +22,7 @@ Do not retell the same event twice, including events in the supplied alreadyUsed
 A follow-up, an update, or a differently worded version of a headline in alreadyUsed
 counts as the same event; the runner rejects it and that article slot is lost.
 If the requested number of well-supported suitable stories is unavailable, return fewer articles and
-explain the shortage in skipped. Never manufacture a story to satisfy the quota.
+explain the shortage in skipped as an array of strings. Never manufacture a story to satisfy the quota.
 
 Each article must have 1,500-2,900 Unicode characters of body text (headings included),
 4-8 normal paragraphs (the first a dateline lead), 1-2 subheads, optional bullet items.

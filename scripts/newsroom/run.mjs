@@ -64,6 +64,56 @@ export function sanityClient(config) {
   };
 }
 
+function articleResponseSchema(count) {
+  const string = { type: 'STRING' };
+  return {
+    type: 'OBJECT',
+    properties: {
+      articles: {
+        type: 'ARRAY', minItems: 0, maxItems: count,
+        description: 'Return only supported distinct stories, up to the requested count. Return fewer or none rather than inventing facts.',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            title: { type: 'STRING', description: 'Hindi headline in Devanagari, with no Latin letters.' },
+            slug: { type: 'STRING', description: 'Lowercase ASCII words separated by hyphens, at most 90 characters.' },
+            district: { type: 'STRING', description: 'Place in Devanagari, or an empty string.' },
+            tags: { type: 'ARRAY', minItems: 3, maxItems: 6, items: { type: 'STRING', description: 'Hindi tag in Devanagari, with no Latin letters.' } },
+            sourceIds: { type: 'ARRAY', minItems: 1, maxItems: 3, items: string },
+            evidence: {
+              type: 'ARRAY', minItems: 1, maxItems: 3,
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  sourceId: string,
+                  quote: { type: 'STRING', description: 'Copy 30-180 characters verbatim from this source text. Never translate evidence.' },
+                },
+                required: ['sourceId', 'quote'],
+              },
+            },
+            imageQueries: { type: 'ARRAY', maxItems: 3, items: string },
+            blocks: {
+              type: 'ARRAY', minItems: 5, maxItems: 20,
+              description: 'Prefer five paragraphs and two headings. The complete Hindi body must contain 1500-2900 Unicode characters, including headings.',
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  type: { type: 'STRING', enum: ['paragraph', 'heading', 'bullet'] },
+                  text: { type: 'STRING', description: 'Nonempty Hindi text in Devanagari, not an array or object. No Latin letters.' },
+                },
+                required: ['type', 'text'],
+              },
+            },
+          },
+          required: ['title', 'slug', 'district', 'tags', 'sourceIds', 'evidence', 'imageQueries', 'blocks'],
+        },
+      },
+      skipped: { type: 'ARRAY', items: string, description: 'Explain shortages without inventing articles.' },
+    },
+    required: ['articles', 'skipped'],
+  };
+}
+
 export async function generate(config, prompt, category, sources, alreadyUsed, count = 2, correctionRequest = null) {
   const response = await requestJson(`https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent`, {
     domains: ['generativelanguage.googleapis.com'], label: 'Gemini generation', method: 'POST',
@@ -71,7 +121,7 @@ export async function generate(config, prompt, category, sources, alreadyUsed, c
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: prompt }] },
       contents: [{ role: 'user', parts: [{ text: JSON.stringify({ category, requestedArticleCount: count, todayIST: dayInIndia(), sources, alreadyUsed, ...(correctionRequest ? { correctionRequest } : {}) }) }] }],
-      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: count === 1 ? 8000 : 14000 },
+      generationConfig: { responseMimeType: 'application/json', responseSchema: articleResponseSchema(count), maxOutputTokens: count === 1 ? 8000 : 14000 },
     }),
   });
   const candidate = response.candidates?.[0];
@@ -226,9 +276,14 @@ export async function main(args = process.argv.slice(2)) {
             await writeReport();
             continue;
           }
-          if (Array.isArray(payload.skipped) && payload.skipped.length) report.warnings.push(`${category}: model reported ${payload.skipped.length} skipped items`);
+          if (Array.isArray(payload?.skipped) && payload.skipped.length) report.warnings.push(`${category}: model reported ${payload.skipped.length} skipped items`);
           try {
             articles = validateArticles(payload, category, sources, used, plan.perCategory);
+            if (articles.length < plan.perCategory) {
+              const warning = `${category}: accepted ${articles.length} of ${plan.perCategory} requested article(s); batch minimum is unchanged`;
+              report.warnings.push(warning);
+              console.warn(warning);
+            }
             break;
           } catch (error) {
             if (!(error instanceof ArticleStructureError || error instanceof ArticleLengthError || error instanceof ArticleEvidenceError) || corrected || JSON.stringify(payload).length > 40000) throw error;
