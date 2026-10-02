@@ -63,8 +63,8 @@ Under **Variables > New repository variable**:
 | `GEMINI_MODEL` | Exact supported free-tier text model ID from your AI Studio project, without `models/` |
 | `SANITY_PROJECT_ID` | `g1o8uwxq` |
 | `SANITY_DATASET` | `production` |
-| `NEWSROOM_ENABLED` | `false` |
-| `NEWSROOM_PUBLISH` | `false` |
+| `NEWSROOM_ENABLED` | `true` |
+| `NEWSROOM_PUBLISH` | `true` |
 | `NEWSROOM_REQUEST_INTERVAL_MS` | `15000` (optional) |
 
 No Sanity write token is needed for your first preview. The production dataset is
