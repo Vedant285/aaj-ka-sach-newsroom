@@ -12,15 +12,15 @@ on:
         default: dry-run
         required: true
       article_count:
-        description: Start with 1 article. Choose 20 for the full daily batch.
+        description: Start with 1 article. Choose 18 for the full daily batch.
         type: choice
         options:
           - '1'
-          - '20'
+          - '18'
         default: '1'
         required: true
       category:
-        description: Category for a one-article run. Ignored when article count is 20.
+        description: Category for a one-article run. Ignored when article count is 18.
         type: choice
         options:
           - up
@@ -31,12 +31,11 @@ on:
           - business
           - sports
           - others
-          - mystery
           - lifestyle
         default: up
         required: true
   schedule:
-        - cron: '0 5 * * *'
+    - cron: '53 3 * * *'
 
 permissions:
   contents: read
@@ -52,7 +51,7 @@ jobs:
     timeout-minutes: 45
     env:
       NEWSROOM_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (vars.NEWSROOM_PUBLISH == 'true' && 'publish' || 'dry-run') }}
-      NEWSROOM_ARTICLE_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.article_count || '20' }}
+      NEWSROOM_ARTICLE_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.article_count || '18' }}
       NEWSROOM_CATEGORY: ${{ inputs.category || 'up' }}
     steps:
       - name: Check out repository
