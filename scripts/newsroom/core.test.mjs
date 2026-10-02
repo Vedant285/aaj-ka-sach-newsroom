@@ -64,7 +64,9 @@ const article = (category) => ({
 function buildBatch(perCategory = {}) {
   const plan = batchPlan(20);
   const slots = new Map();
-  const now = new Date();
+  // Pinned to the batch day: verifyPosts requires publishedAt to fall on that IST day, so
+  // a live clock passed only on 1 October and failed every day after.
+  const now = new Date('2026-10-01T06:00:00Z');
   return CATEGORIES
     .flatMap((category) => Array.from({ length: perCategory[category] ?? 2 }, () => article(category)))
     .map((item, index) => {
@@ -109,6 +111,22 @@ test('published documents carry no caption, no image line and no outbound links'
   assert.deepEqual(blocks.map((block) => block.children[0].text), source.blocks.map((block) => block.text));
   assert.deepEqual(blocks, portableText({ ...source, image: null }));
   assert.ok(blocks.every((block) => block.markDefs.length === 0));
+});
+
+test('every source and evidence entry carries a unique _key', () => {
+  // The Studio declares newsroom.sources and newsroom.evidence, and shows a "Missing keys"
+  // alert in place of any array of objects whose items have no _key.
+  const sources = ['a', 'b'].map((id) => ({ id, url: `https://www.bhaskar.com/${id}`, title: 'स', publishedAt: null }));
+  const evidence = [{ sourceId: 'a', quote: 'पहला' }, { sourceId: 'b', quote: 'दूसरा' }];
+  const { newsroom } = makeDocument({ ...article('up'), sources, evidence }, 0, '2026-10-01', new Date(), 'asset-1', batchPlan(20), 1);
+  for (const list of [newsroom.sources, newsroom.evidence]) {
+    assert.equal(list.length, 2);
+    assert.ok(list.every((item) => typeof item._key === 'string' && item._key));
+    assert.equal(new Set(list.map((item) => item._key)).size, list.length);
+  }
+  // The key is added, nothing is lost: the run reads these back for its audit trail.
+  assert.deepEqual(newsroom.sources.map((item) => item.url), sources.map((source) => source.url));
+  assert.deepEqual(newsroom.evidence.map((item) => item.quote), evidence.map((item) => item.quote));
 });
 
 test('every category has at least one configured source and none is shared', () => {

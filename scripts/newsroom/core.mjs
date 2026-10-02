@@ -521,7 +521,13 @@ export function makeDocument(article, index, day, now, assetId, plan = batchPlan
     ...(article.image ? { mainImage: { _type: 'image', asset: { _type: 'reference', _ref: assetId }, alt: article.title } } : {}),
     editorialStatus: 'approved', webPriority: 60, isBreaking: false,
     publishedAt: new Date(now.getTime() - (plan.count - 1 - index) * 1000).toISOString(),
-    newsroom: { day, batchSize: plan.count, sourceIds: article.sourceIds, sources: article.sources, evidence: article.evidence, image: article.image },
+    // Every object in a Sanity array needs a _key. Without one the Studio replaces the
+    // whole list with a "Missing keys" alert instead of showing the sources.
+    newsroom: {
+      day, batchSize: plan.count, sourceIds: article.sourceIds, image: article.image,
+      sources: article.sources.map((source, position) => ({ _key: `source-${position}`, ...source })),
+      evidence: article.evidence.map((item, position) => ({ _key: `evidence-${position}`, ...item })),
+    },
   };
 }
 
