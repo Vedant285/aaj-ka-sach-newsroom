@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateValidatedCategory } from './run.mjs';
+import { configuration, generateValidatedCategory, sanityClient } from './run.mjs';
 import { QuotaError } from './core.mjs';
 
 const quote = 'This source text contains an exact excerpt used only in offline tests.';
@@ -9,7 +9,7 @@ const paragraph = 'यह केवल परीक्षण का पाठ �
 const draft = (index) => ({
   title: index === 1 ? 'विद्यालय में नई पुस्तकालय सुविधा शुरू' : 'खेल प्रतियोगिता में खिलाड़ियों की शानदार जीत',
   slug: `test-article-${index}`, district: '', tags: ['शिक्षा', 'विकास', 'खेल'],
-  sourceIds: [`source-${index}`], evidence: [{ sourceId: `source-${index}`, quote }], imageQueries: [],
+  sourceIds: [`source-${index}`], evidence: [{ sourceId: `source-${index}`, quote }],
   blocks: [{ type: 'paragraph', text: paragraph }, { type: 'heading', text: 'नई सुविधा' },
     ...Array.from({ length: 4 }, () => ({ type: 'paragraph', text: paragraph }))],
 });
@@ -34,6 +34,8 @@ async function exercise(context, responses, count = 2) {
     assert.equal(schema.properties.articles.maxItems, request.requestedArticleCount);
     assert.deepEqual(schema.properties.articles.items.properties.blocks.items.properties.type.enum, ['paragraph', 'heading', 'bullet']);
     assert.equal(schema.properties.articles.items.properties.blocks.items.properties.text.type, 'STRING');
+    // Posts are text only, so the model is never asked for photo search terms.
+    assert.ok(!('imageQueries' in schema.properties.articles.items.properties) && !schema.properties.articles.items.required.includes('imageQueries'));
     requests.push(request);
     assert.ok(requests.length <= responses.length, 'Unexpected extra request');
     const response = responses[requests.length - 1];
@@ -112,4 +114,22 @@ test('empty responses never become publishable articles', async (context) => {
 
 test('quota errors still abort instead of publishing a partially generated batch', async (context) => {
   await assert.rejects(() => exercise(context, [payload(draft(1), invalidDraft()), new QuotaError('offline quota failure')]), QuotaError);
+});
+
+test('the Sanity client writes drafts and refuses anything that would go straight to the site', async (context) => {
+  let writes = 0;
+  context.mock.method(globalThis, 'fetch', async (url, options) => {
+    const parsed = new URL(url);
+    assert.equal(parsed.hostname, 'g1o8uwxq.api.sanity.io');
+    assert.equal(parsed.pathname, '/v2021-06-07/data/mutate/production');
+    assert.equal(options.headers.Authorization, 'Bearer offline-test-token');
+    writes++;
+    assert.deepEqual(JSON.parse(options.body), { mutations: [{ createIfNotExists: { _id: 'drafts.offline-test-document' } }] });
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  });
+  const client = sanityClient(configuration({ SANITY_API_TOKEN: 'offline-test-token' }));
+  await assert.rejects(() => client.createDrafts([{ _id: 'drafts.offline-test-document' }, { _id: 'offline-test-document' }]), /drafts only/);
+  assert.equal(writes, 0);
+  await client.createDrafts([{ _id: 'drafts.offline-test-document' }]);
+  assert.equal(writes, 1);
 });
