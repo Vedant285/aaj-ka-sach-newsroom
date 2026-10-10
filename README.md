@@ -4,9 +4,12 @@ This folder is a complete, independent GitHub Actions project. You do **not** ne
 to upload the website, Next.js app, Sanity Studio, old newsroom batches, images, or
 local environment files. It talks to Gemini and Sanity over their APIs.
 
-Manual runs default to **one article + dry-run**. No scheduling or publication is
-enabled automatically. The original website folder has not been changed by this
-standalone extraction. Use this repository as your automation source going forward.
+Manual runs default to **one article + dry-run**. No schedule is enabled
+automatically, and the newsroom never publishes anything itself: every article it
+writes is a Sanity draft that stays off the website until an editor approves it
+(see [Approving articles](#approving-articles)). The original website folder has not
+been changed by this standalone extraction. Use this repository as your automation
+source going forward.
 
 ## Create your separate GitHub repository
 
@@ -91,50 +94,27 @@ issues, screenshots, or source code, and never prefix it with `NEXT_PUBLIC_`.
 3. Click **Run workflow** and open that run to watch progress.
 4. Read the summary after completion. Download the `newsroom-...` artifact under
    **Artifacts** on the run summary page.
-5. Open `report.json` for the full generated article, source references, evidence,
-   and image information. `report.md` has the headline, checks, and warnings.
-   `documents.json` contains proposed Sanity documents, not ready-to-import files:
-   dry-run image references are placeholders.
+5. Open `report.json` for the full generated article, source references and evidence.
+   `report.md` has the headline, checks, and warnings. `documents.json` contains
+   proposed Sanity documents, not ready-to-import files.
 
 The one-article run generates only the selected category and normally makes one
 Gemini generation request. It may retry transient API errors, so it is not a promise
 of exactly one billable/quota-counted request. It also fetches source articles.
-Dry-run consumes API quota but uploads no assets and creates no posts. If no suitable
-supported story exists, it fails rather than inventing one.
+Dry-run consumes API quota but creates no posts. If no suitable supported story
+exists, it fails rather than inventing one.
 
-## Real photo, otherwise no image
+## Text only, no photos
 
-The newsroom uses an optional licensed representative real photo. It never calls
-an AI image API, renders headline cards, or adds a title/date/branding overlay.
-If no suitable photo is found or its download fails, the article continues without
-`mainImage`, an asset upload, or an image notice. Missing images are warnings, not
-batch failures. Content, source, date, duplication and publication checks still apply.
+Articles are text only. The newsroom does not search for, download or upload a
+photo, and posts are created without `mainImage`. Photos matched to a story by
+keyword were too often of the wrong subject, so photo selection was removed. It
+never calls an AI image API, renders headline cards, or adds a title/date/branding
+overlay. Content, source, date and duplication checks still apply.
 
-The original Gemini article response supplies up to three short subject queries;
-no extra Gemini call is needed. Commons searches retain the CC0/public-domain,
-minimum-width and restriction checks. CC0 requires an official CC0 licence URL;
-public-domain-labelled files require a false copyright flag. Mandatory attribution
-and non-free flags are rejected case-insensitively. Unknown licences are not accepted.
-
-Candidate titles must match most subject-query words. Metadata mentioning obvious
-AI generation, illustrations, diagrams, screenshots, logos, maps or watermarks is
-rejected. These are conservative text-based filters, not visual verification:
-they may skip good photos or miss unsuitable ones. Review the downloaded photo
-and its licence/source page before publication. No watermark is removed, and the
-absence of a watermark is never taken as reuse permission. Publisher photos are
-not automatically copied from news articles.
-
-Extract the Actions artifact to review `photo-*.jpg`, `photo-*.png` or `photo-*.webp`
-beside the report and documents. Reports show the source/creator/licence, a local
-preview when available, and actual `withImages`/`withoutImages` counts. Text-only
-articles have no photo preview. Photos are labelled representative in the article
-body, not inside the image; they are not claimed to show the reported event.
-
-Photos are downloaded once before publication, checked for size/type/signature,
-and uploaded from those same bytes after a hash check. Sanity authentication or
-upload failures remain errors, not silent text-only fallbacks. Dry-run makes no
-Sanity writes. Publish still generates fresh articles; it does not promote an older
-reviewed artifact. Existing same-day published posts are verified, not modified.
+Dry-run makes no Sanity writes. Publish mode generates fresh articles and writes
+them as drafts; it does not promote an older reviewed artifact. Posts already
+written that IST day are never modified.
 
 No new secret, paid API or workflow edit is required. Old headline-card/font files
 can remain; the runner no longer imports or uses them.
@@ -142,12 +122,11 @@ can remain; the runner no longer imports or uses them.
 If the response has malformed block objects, the wrong paragraph/subheading
 structure, or an out-of-range body length, the runner prints the offending block
 requirement or actual counts and allows **one format/length correction request per
-category in total**, not one per error type. Length diagnostics include Unicode
-character counts before and after the image notice. The body still needs at least
-1,500 characters, with at most 2,900 including the notice. This correction
-consumes additional Gemini quota and uses the same request pacing. The corrected
-article must pass every original validation rule. It does not retry missing-story,
-evidence, image, or other validation failures as format/length corrections.
+category in total**, not one per error type. Length diagnostics count Unicode
+characters. The body needs 1,500-2,900 characters; nothing is appended to it. This
+correction consumes additional Gemini quota and uses the same request pacing. The
+corrected article must pass every original validation rule. It does not retry
+missing-story, evidence, or other validation failures as format/length corrections.
 Any remaining validation failure stops that category; the runner never loops indefinitely.
 The final category failure is printed in the Actions log as well as the report.
 
@@ -156,8 +135,8 @@ Hindi newsroom > Run workflow** on `main`. Do not use **Re-run jobs** on an old 
 to test new code, since that repeats the old run's commit.
 
 Categories: `up` (Uttar Pradesh), `uk` (Uttarakhand), `delhi`, `world`, `dharma`,
-`business`, `sports`, `others`, `mystery`, `lifestyle`. National/international
-fallback sources may be used when appropriate local coverage is unavailable.
+`business`, `sports`, `others`, `lifestyle`. National/international fallback
+sources may be used when appropriate local coverage is unavailable.
 
 ## If Gemini fails: run the connection check
 
@@ -176,7 +155,7 @@ run summary or **Check Gemini with one small request** log. Share the diagnostic
 `httpStatus`, `apiStatus`, `message`, and `finishReason` if present. The message is
 bounded and the configured key is redacted; raw API bodies are not printed.
 
-- **Passed:** retry a one-article dry-run, not a live publication.
+- **Passed:** retry a one-article dry-run.
 - **503:** the small request is also unavailable; examine the API message, wait,
   or test another model after confirming its free-tier access in your project.
 - **429:** inspect the project's actual model quota instead of repeatedly rerunning.
@@ -185,25 +164,26 @@ bounded and the configured key is redacted; raw API bodies are not printed.
 - **HTTP 200 but failed:** the service responded but did not complete valid JSON;
   inspect `finishReason` before attributing it to service overload.
 
-## Later: publish one article
+## Later: write one article for approval
 
 Only after reviewing the preview and accepting automated generation:
 
 1. Create a dedicated Sanity project API token with the minimum permissions available
-   for uploading assets and writing posts. Do not reuse a personal CLI session token.
+   for writing posts. Do not reuse a personal CLI session token.
 2. Add it to this repository's **Secrets** as `SANITY_API_TOKEN`.
 3. Run the same workflow with `mode=publish`, `article_count=1`, and your category.
 
-**Publish mode generates a fresh article. It does not promote the exact article
-from a previous dry-run.** This is not an editorial approval system for saved files.
-Published posts have `editorialStatus=approved` and will be visible on the live site.
-If every individual article needs human approval, leave publishing disabled.
+**Publish mode writes to Sanity, but it does not put anything on the website.** Each
+article is saved as an unpublished draft with editorial status **⏳ In review —
+waiting for the desk**, and readers see it only after an editor approves it (see
+[Approving articles](#approving-articles)). Publish mode generates a fresh article;
+it does not promote the exact article from a previous dry-run.
 
-One-article runs use IDs such as `newsroom-test-YYYY-MM-DD-up-1`. A successful
-publication is limited to one slot per IST day/category: reruns verify the existing
-post rather than creating another. These IDs do not collide with the normal daily
-20-article batch. Recent source URLs and exact headlines are also checked, but
-semantic duplicates are not guaranteed to be detected.
+One-article runs use IDs such as `drafts.newsroom-test-YYYY-MM-DD-up-1`. Each IST
+day/category has one such slot: once it is written, reruns report on it rather than
+creating another. These IDs do not collide with the normal daily 18-article batch.
+Recent source URLs and exact headlines, including those of drafts still waiting for
+approval, are also checked, but semantic duplicates are not guaranteed to be detected.
 
 The `NEWSROOM_ENABLED` and `NEWSROOM_PUBLISH` variables control scheduled runs only;
 they do **not** override a manually selected publish mode. Restrict repository write
@@ -211,19 +191,61 @@ access to trusted collaborators. GitHub concurrency is scoped to a repository:
 disable the old website repository's newsroom schedule if it was ever enabled.
 Do not run both repositories or local and GitHub publishers at the same time.
 
+## Approving articles
+
+Approve posts in the Studio built into the website, at `/studio` on the site's own
+address. The separately hosted `aapkasach.sanity.studio` still runs an old schema;
+do not use it for approvals.
+
+1. Open **🗞️ Newsroom > ⏳ Awaiting review**. Newsroom drafts are listed there.
+2. Open a post and check its facts, headline and category. The run's `report.md`
+   lists each article's source links. Edit anything that needs it; you can also add
+   a photo.
+3. Set **Editorial status** to **✅ Approved — live on the website**. This needs an
+   administrator, editor or developer account.
+4. Click **Publish**.
+
+The website shows only approved posts. If you click **Publish** without step 3, the
+post stays hidden and remains under **⏳ Awaiting review**: set the status and
+publish again.
+
+To reject a story, set its status to **🗄️ Archived — pulled from the website**, or
+delete it.
+
+Worth knowing:
+
+- **Published at** is when the newsroom wrote the draft, not when it was approved.
+  The homepage is ordered by this date, so update it when approving late if the
+  story should appear as new.
+- Drafts in review and archived ones count as recent posts: for 14 days the
+  newsroom will not reuse their sources or headlines. Deleting a draft frees them,
+  so the same story may be written again while it is still in the news feeds;
+  archive it instead to keep it out.
+- Once a day's batch is written, later runs that day only report how many of its
+  posts are published and how many are still drafts. They do not replace rejected
+  stories or top the batch up. If every post of the day is deleted, a new run
+  writes a fresh batch.
+- A dry-run has no Sanity token and cannot see drafts, so it may pick stories
+  already waiting for approval. It still writes nothing.
+
 ## Later: the full daily batch
 
-For a manual full run, select `article_count=20`. The category dropdown is ignored:
-the script requires two articles in each of the ten categories.
+For a manual full run, select `article_count=18` (the script accepts only 1 or 18).
+The category dropdown is ignored: the script asks for two articles in each of the
+nine categories. Articles that still fail validation after their one correction are
+dropped, so a batch can be smaller than 18; it is written as long as at least one
+article passes.
 
-Scheduled runs are always the full 20-article batch at **06:10 IST** (`00:40 UTC`):
+Scheduled runs are always the full batch, at the time set by the `cron` line in
+`.github/workflows/newsroom.yml` (GitHub reads it as UTC; India is UTC+5:30):
 
 - `NEWSROOM_ENABLED=false`: no scheduled processing (initial setting).
 - `NEWSROOM_ENABLED=true`, `NEWSROOM_PUBLISH=false`: daily dry-run only.
-- Both `true`: daily live publication without a human approval step.
+- Both `true`: the day's articles are written to Sanity as drafts awaiting approval.
+  Nothing reaches the website until an editor approves each one.
 
 GitHub's schedule may be delayed and public-repository inactivity can disable it.
-Free Gemini quota does not guarantee capacity for 20 long articles/day. GitHub
+Free Gemini quota does not guarantee capacity for 18 long articles/day. GitHub
 Actions usage allowances are separate from API quotas. Your Windows computer does
 not need to stay on: the workflow uses a GitHub-hosted Ubuntu runner.
 
@@ -248,8 +270,8 @@ npm.cmd run newsroom:dry-run
 
 The configuration check is offline; it does not verify credentials, quotas, or API
 availability. Local output is saved under `newsroom-output`. An explicitly requested
-`npm.cmd run newsroom:publish` publishes live using the configured count/category.
-Using `npm.cmd` avoids PowerShell execution-policy issues with `npm.ps1`.
+`npm.cmd run newsroom:publish` writes drafts awaiting approval, using the configured
+count/category. Using `npm.cmd` avoids PowerShell execution-policy issues with `npm.ps1`.
 
 ## Safeguards and limitations
 
@@ -259,16 +281,19 @@ Using `npm.cmd` avoids PowerShell execution-policy issues with `npm.ps1`.
 - Validate article counts, Hindi text, paragraph/subhead structure, body length,
   slugs/tags, source references, and exact evidence excerpts. Evidence proves text
   was supplied, not that every generated claim is correct. Review factual accuracy,
-  positivity, originality, and image relevance yourself.
-- Use optional licensed representative photos without overlays, or publish text-only.
-  Review photo relevance and rights; metadata checks are not visual verification.
-  Never substitute an AI image or headline card when real-photo selection fails.
-- All required articles must pass before Sanity uploads; photos are optional. A single transaction
-  uses `createIfNotExists`; uncertain writes are checked rather than blindly retried.
-  Failed uploads can leave unused assets but not a partially published article batch.
-- Existing daily IDs, source reuse, headline duplicates, dates, images, bylines,
-  priority, counts, and homepage visibility are checked. A homepage/cache check can
-  fail after posts are live; inspect Sanity rather than deleting/recreating them.
+  positivity and originality yourself.
+- Text only: no photo is searched for, downloaded or uploaded, and no AI image or
+  headline card is generated in its place.
+- Never publish. The runner writes only `drafts.` documents with status `in-review`
+  and refuses any other ID. It cannot change or publish an existing post; an editor
+  approves each article in the Studio.
+- Every category is generated and validated before anything is written to Sanity.
+  A single transaction uses `createIfNotExists`; uncertain writes are checked by
+  reading the drafts back rather than blindly retried. A failed write cannot leave
+  a partial batch.
+- Existing daily IDs, source reuse, headline duplicates, dates, bylines, priority
+  and counts are checked, and the written drafts are verified. The website is not
+  checked: nothing appears there until an editor approves it.
 - No global unpinning, website builds/deployments, git commits/pushes, or original
   PowerShell prompt execution. This project does not contain the website's code.
 - Reports are retained in GitHub for seven days. No full source-page HTML, API keys,
@@ -282,6 +307,5 @@ Unsupported, blocked, stale, or short sources are skipped with diagnostics.
 
 Official references: [GitHub file uploads](https://docs.github.com/en/repositories/working-with-files/managing-files/adding-a-file-to-a-repository),
 [manual workflows](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow),
-[Gemini API](https://ai.google.dev/api/generate-content),
-[Gemini quotas](https://ai.google.dev/gemini-api/docs/rate-limits), and
-[Commons image metadata](https://www.mediawiki.org/wiki/API:Imageinfo).
+[Gemini API](https://ai.google.dev/api/generate-content), and
+[Gemini quotas](https://ai.google.dev/gemini-api/docs/rate-limits).
